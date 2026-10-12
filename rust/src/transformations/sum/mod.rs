@@ -19,6 +19,9 @@ use int::signs_agree;
 #[cfg(all(test, feature = "partials"))]
 mod test;
 
+#[cfg(test)]
+mod test_props;
+
 #[bootstrap(features("contrib"), generics(MI(suppress), T(suppress)))]
 /// Make a Transformation that computes the sum of bounded data.
 /// Use `make_clamp` to bound data.
