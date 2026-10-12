@@ -22,6 +22,8 @@ use crate::test_props::*;
 struct Case<K: Hashable> {
     domain: VectorDomain<AtomDomain<K>>,
     data: Vec<K>,
+    /// a random permutation of `data`
+    permuted: Vec<K>,
     edits: Vec<Edit<K>>,
     other: Vec<K>,
     /// extra input distances to probe the stability map with
@@ -35,27 +37,30 @@ fn case<K: Hashable, S: Strategy<Value = K>>(
 ) -> impl Strategy<Value = Case<K>> {
     (
         any::<bool>(),
-        prop::collection::vec(key(), 0..40),
+        with_permutation(prop::collection::vec(key(), 0..40)),
         edits(key()),
         prop::collection::vec(key(), 0..40),
         distances(),
     )
-        .prop_map(move |(sized, data, edits, mut other, distances)| {
-            let mut domain = VectorDomain::new(element_domain.clone());
-            if sized {
-                domain.size = Some(data.len());
-                // the second dataset must also have the known size
-                other.truncate(data.len());
-                other.extend_from_slice(&data[other.len()..]);
-            }
-            Case {
-                domain,
-                data,
-                edits,
-                other,
-                distances,
-            }
-        })
+        .prop_map(
+            move |(sized, (data, permuted), edits, mut other, distances)| {
+                let mut domain = VectorDomain::new(element_domain.clone());
+                if sized {
+                    domain.size = Some(data.len());
+                    // the second dataset must also have the known size
+                    other.truncate(data.len());
+                    other.extend_from_slice(&data[other.len()..]);
+                }
+                Case {
+                    domain,
+                    data,
+                    permuted,
+                    edits,
+                    other,
+                    distances,
+                }
+            },
+        )
 }
 
 /// One key repeated about `V::MAX` times, so that its count straddles saturation.
@@ -87,19 +92,24 @@ fn heavy_case<V: PropInt>() -> impl Strategy<Value = Case<u8>> {
                 other.extend_from_slice(&data[other.len()..]);
             }
             // edits mostly add or remove the saturated key
-            edits(prop_oneof![3 => Just(k), 1 => any::<u8>()]).prop_map(move |edits| Case {
-                domain: domain.clone(),
-                data: data.clone(),
-                edits,
-                other: other.clone(),
-                distances: distances.clone(),
-            })
+            (
+                Just(data.clone()).prop_shuffle(),
+                edits(prop_oneof![3 => Just(k), 1 => any::<u8>()]),
+            )
+                .prop_map(move |(permuted, edits)| Case {
+                    domain: domain.clone(),
+                    data: data.clone(),
+                    permuted,
+                    edits,
+                    other: other.clone(),
+                    distances: distances.clone(),
+                })
         })
 }
 
 /// `u8` keys, in bounded, unbounded and saturating datasets.
 fn u8_key_case<V: PropInt>() -> impl Strategy<Value = Case<u8>> {
-    let bounded = int_bounds::<u8>()
+    let bounded = bounds(int_value::<u8>)
         .prop_flat_map(|b| case(AtomDomain::new_closed(b).unwrap(), move || int_value_in(b)));
     prop_oneof![
         bounded,
@@ -151,16 +161,11 @@ fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
     }
 
     // B3: the input metric is unordered, so the result can't depend on order
-    let mut reordered = case.data.clone();
-    reordered.reverse();
-    prop_assert!(ok(t.invoke(&reordered))? == out);
-    let mid = reordered.len() / 2;
-    reordered.rotate_left(mid);
-    prop_assert!(ok(t.invoke(&reordered))? == out);
+    prop_assert!(ok(t.invoke(&case.permuted))? == out);
 
     // B6: adding a record increments only its key, unless saturated
     if case.domain.size.is_none()
-        && let Some((_, _, key)) = case.edits.first()
+        && let Some((_, _, _, key)) = case.edits.first()
     {
         let mut added = case.data.clone();
         added.push(key.clone());

@@ -28,6 +28,8 @@ struct Case<T> {
     bounds: (T, T),
     sized: bool,
     data: Vec<T>,
+    /// a random permutation of `data`
+    permuted: Vec<T>,
     edits: Vec<Edit<T>>,
     /// extra input distances to probe the stability map with
     distances: Vec<IntDistance>,
@@ -41,19 +43,13 @@ trait SumInt: PropInt + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistanc
 impl<T> SumInt for T where T: PropInt + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
 
 fn int_case<T: SumInt>() -> impl Strategy<Value = Case<T>> {
-    let generic = (int_bounds::<T>(), 0usize..24);
+    let generic = (bounds(int_value::<T>), 0usize..24);
     let boundary = (1usize..=64, 0u8..3, any::<u8>(), 0usize..3)
         .prop_map(|(n, delta, shape, dn)| (int_boundary_bounds::<T>(n, delta, shape), n + dn - 1));
 
     prop_oneof![generic, boundary].prop_flat_map(|(bounds, len)| {
-        (
-            any::<bool>(),
-            prop::collection::vec(int_value_in(bounds), len),
-            0u8..4,
-            edits(int_value_in(bounds)),
-            distances(),
-        )
-            .prop_map(move |(sized, mut data, arrange, edits, distances)| {
+        let data = (prop::collection::vec(int_value_in(bounds), len), 0u8..4).prop_map(
+            |(mut data, arrange)| {
                 // orderings that stress saturation in the order-dependent sums
                 let zero = from_big::<T>(IBig::ZERO).unwrap();
                 match arrange {
@@ -62,13 +58,22 @@ fn int_case<T: SumInt>() -> impl Strategy<Value = Case<T>> {
                     3 => data.sort_by_key(|v| *v < zero),
                     _ => (),
                 }
-                Case {
-                    bounds,
-                    sized,
-                    data,
-                    edits,
-                    distances,
-                }
+                data
+            },
+        );
+        (
+            any::<bool>(),
+            with_permutation(data),
+            edits(int_value_in(bounds)),
+            distances(),
+        )
+            .prop_map(move |(sized, (data, permuted), edits, distances)| Case {
+                bounds,
+                sized,
+                data,
+                permuted,
+                edits,
+                distances,
             })
     })
 }
@@ -158,11 +163,7 @@ where
 
     // B8: under an unordered metric, the result can't depend on order
     if !ordered {
-        let mut reordered = case.data.clone();
-        reordered.reverse();
-        prop_assert_eq!(&big(ok(t.invoke(&reordered))?), &y);
-        reordered.sort();
-        prop_assert_eq!(&big(ok(t.invoke(&reordered))?), &y);
+        prop_assert_eq!(&big(ok(t.invoke(&case.permuted))?), &y);
     }
 
     // C2/C4/C5: the map equals the ideal sensitivity exactly, or fails because it isn't representable
@@ -212,18 +213,23 @@ impl<T> SumFloat for T where
 {
 }
 
+/// Values just below `MAX / 2^j`, where the overflow threshold of size-`2^j` sums sits.
+/// Small `j` covers `MAX / n`; large `j` covers the pairwise magnitude limit.
+fn near_overflow<T: SumFloat>() -> impl Strategy<Value = T> {
+    (prop_oneof![1i32..8, 0i32..64], 0.5f64..1.0, any::<bool>()).prop_map(|(j, frac, neg)| {
+        let two = <T as num::NumCast>::from(2).unwrap();
+        let frac = <T as num::NumCast>::from(frac).unwrap();
+        let v = <T as num::Float>::max_value() / num::Float::powi(two, j) * frac;
+        if neg { -v } else { v }
+    })
+}
+
 fn float_case<T: SumFloat>() -> impl Strategy<Value = Case<T>> {
-    let bounds = float_bounds::<T>();
+    let bounds = bounds(|| prop_oneof![4 => float_value::<T>(), 1 => near_overflow::<T>()]);
 
     (bounds, prop_oneof![0usize..8, 0usize..70]).prop_flat_map(|(bounds, len)| {
-        (
-            any::<bool>(),
-            prop::collection::vec(float_value_in(bounds), len),
-            0u8..4,
-            edits(float_value_in(bounds)),
-            distances(),
-        )
-            .prop_map(move |(sized, mut data, arrange, edits, distances)| {
+        let data = (prop::collection::vec(float_value_in(bounds), len), 0u8..4).prop_map(
+            |(mut data, arrange)| {
                 // orderings that stress saturation and cancellation
                 let zero = <T as num::Zero>::zero();
                 match arrange {
@@ -232,13 +238,22 @@ fn float_case<T: SumFloat>() -> impl Strategy<Value = Case<T>> {
                     3 => data.sort_by_key(|v| *v < zero),
                     _ => (),
                 }
-                Case {
-                    bounds,
-                    sized,
-                    data,
-                    edits,
-                    distances,
-                }
+                data
+            },
+        );
+        (
+            any::<bool>(),
+            with_permutation(data),
+            edits(float_value_in(bounds)),
+            distances(),
+        )
+            .prop_map(move |(sized, (data, permuted), edits, distances)| Case {
+                bounds,
+                sized,
+                data,
+                permuted,
+                edits,
+                distances,
             })
     })
 }
@@ -306,10 +321,8 @@ where
 
     // B8: under an unordered metric, reordering changes the result by at most the relaxation
     if !ordered && !can_overflow {
-        let mut reordered = case.data.clone();
-        reordered.reverse();
-        let y_rev = ok(t.invoke(&reordered))?;
-        prop_assert!(abs_rat(rat(y_rev).unwrap() - rat(y).unwrap()) <= relaxation_r.clone());
+        let y_perm = ok(t.invoke(&case.permuted))?;
+        prop_assert!(abs_rat(rat(y_perm).unwrap() - rat(y).unwrap()) <= relaxation_r.clone());
     }
 
     // C2-C5: the map is non-negative, monotone, and covers the ideal sensitivity plus relaxation

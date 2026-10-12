@@ -12,11 +12,13 @@
 //! so that overflow or rounding in the atomic type can't hide a failure.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use dashu::integer::IBig;
 use dashu::rational::RBig;
 use proptest::prelude::*;
+use proptest::sample::Index;
 
 use crate::error::Fallible;
 use crate::metrics::IntDistance;
@@ -33,22 +35,24 @@ pub(crate) fn ok<T>(r: Fallible<T>) -> Result<T, TestCaseError> {
 // Datasets, neighbors and distances
 // ---------------------------------------------------------------------------------------------
 
-/// An edit to apply to a dataset: (op, position, in-domain value). See [`neighbor`].
-pub(crate) type Edit<T> = (u8, u16, T);
+/// An edit to apply to a dataset: (alternate op, position, second position, in-domain value).
+/// See [`neighbor`].
+pub(crate) type Edit<T> = (bool, Index, Index, T);
 
 /// Up to four edits, each inserting or substituting a value drawn from `value`.
-pub(crate) fn edits<T: std::fmt::Debug>(
+pub(crate) fn edits<T: Debug>(
     value: impl Strategy<Value = T>,
 ) -> impl Strategy<Value = Vec<Edit<T>>> {
-    prop::collection::vec((any::<u8>(), any::<u16>(), value), 0..5)
+    prop::collection::vec((any::<bool>(), any::<Index>(), any::<Index>(), value), 0..5)
 }
 
 /// Applies `edits` to `x`, returning the neighbor and an upper bound on its distance from `x`.
 ///
 /// Sized datasets only receive changes that preserve length:
-/// a substitution, or (when `ordered`) a deletion at one position and insertion at another.
+/// a substitution, or (when `ordered` and the alternate op is set)
+/// a deletion at one position and insertion at another.
 /// Each costs 2 under both `SymmetricDistance` and `InsertDeleteDistance`.
-/// Unsized datasets receive single insertions or deletions, costing 1 each.
+/// Unsized datasets receive single insertions or (with the alternate op) deletions, costing 1 each.
 pub(crate) fn neighbor<T: Clone>(
     x: &[T],
     edits: &[Edit<T>],
@@ -57,30 +61,42 @@ pub(crate) fn neighbor<T: Clone>(
 ) -> (Vec<T>, IntDistance) {
     let mut x2 = x.to_vec();
     let mut k = 0;
-    for (op, pos, value) in edits {
-        let pos = *pos as usize;
+    for (alt, i, j, value) in edits {
         if sized {
             if x2.is_empty() {
                 continue;
             }
-            let i = pos % x2.len();
-            if ordered && op % 2 == 1 {
+            let i = i.index(x2.len());
+            if ordered && *alt {
                 x2.remove(i);
-                let j = (pos / 7) % (x2.len() + 1);
-                x2.insert(j, value.clone());
+                x2.insert(j.index(x2.len() + 1), value.clone());
             } else {
                 x2[i] = value.clone();
             }
             k += 2;
-        } else if op % 2 == 0 || x2.is_empty() {
-            x2.insert(pos % (x2.len() + 1), value.clone());
+        } else if !alt || x2.is_empty() {
+            x2.insert(i.index(x2.len() + 1), value.clone());
             k += 1;
         } else {
-            x2.remove(pos % x2.len());
+            x2.remove(i.index(x2.len()));
             k += 1;
         }
     }
     (x2, k)
+}
+
+/// A dataset drawn from `data`, paired with a random permutation of it.
+pub(crate) fn with_permutation<T: Clone + Debug>(
+    data: impl Strategy<Value = Vec<T>>,
+) -> impl Strategy<Value = (Vec<T>, Vec<T>)> {
+    data.prop_flat_map(|x| (Just(x.clone()), Just(x).prop_shuffle()))
+}
+
+/// Ordered bounds, with both endpoints drawn from `value()`.
+pub(crate) fn bounds<T: PartialOrd + Debug, S: Strategy<Value = T>>(
+    value: impl Fn() -> S,
+) -> impl Strategy<Value = (T, T)> {
+    (value(), value()).prop_map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
 }
 
 /// The number of occurrences of each distinct value in `x`.
@@ -167,8 +183,24 @@ pub(crate) fn small_char() -> impl Strategy<Value = char> {
 pub(crate) trait PropInt:
     Integer + Arbitrary + num::Bounded + Into<IBig> + TryFrom<IBig>
 {
+    /// Uniformly distributed values in `[l, u]`.
+    fn range(l: Self, u: Self) -> BoxedStrategy<Self>;
 }
-impl<T> PropInt for T where T: Integer + Arbitrary + num::Bounded + Into<IBig> + TryFrom<IBig> {}
+
+macro_rules! impl_prop_int {
+    ($($ty:ty)+) => {$(
+        impl PropInt for $ty {
+            fn range(l: Self, u: Self) -> BoxedStrategy<Self> {
+                // proptest 1.11 computes `end - 1` for signed ranges, which overflows for `MIN..=MIN`
+                if l == u {
+                    return Just(l).boxed();
+                }
+                (l..=u).boxed()
+            }
+        }
+    )+};
+}
+impl_prop_int!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
 
 pub(crate) fn big<T: PropInt>(v: T) -> IBig {
     v.into()
@@ -195,44 +227,25 @@ pub(crate) fn abs_big(v: IBig) -> IBig {
     if v < IBig::ZERO { -v } else { v }
 }
 
-/// An arbitrary value, biased towards the edges of the type.
-pub(crate) fn pick_int<T: PropInt>(sel: u8, raw: T) -> T {
-    let v = match sel % 8 {
-        0 => return raw,
-        1 => int_min::<T>(),
-        2 => int_max::<T>(),
-        3 => int_min::<T>() + IBig::ONE,
-        4 => int_max::<T>() - IBig::ONE,
-        5 => IBig::ZERO,
-        _ => big(raw) % IBig::from(33),
-    };
-    from_big(clamp_big::<T>(v)).unwrap()
+/// Arbitrary values, biased towards the edges of the type and towards small magnitudes.
+pub(crate) fn int_value<T: PropInt>() -> impl Strategy<Value = T> {
+    let int = |v: IBig| from_big::<T>(clamp_big::<T>(v)).unwrap();
+    let edges = [
+        int_min::<T>(),
+        int_min::<T>() + IBig::ONE,
+        IBig::ZERO,
+        int_max::<T>() - IBig::ONE,
+        int_max::<T>(),
+    ]
+    .map(int)
+    .to_vec();
+    let small = T::range(int(IBig::from(-32)), int(IBig::from(32)));
+    prop_oneof![5 => prop::sample::select(edges), 2 => small, 1 => any::<T>()]
 }
 
-/// A value in `[l, u]`, biased towards the endpoints.
-pub(crate) fn int_in_range<T: PropInt>(sel: u8, raw: T, (l, u): (T, T)) -> T {
-    match sel % 4 {
-        0 => l,
-        1 => u,
-        _ => {
-            let span = big(u) - big(l) + IBig::ONE;
-            let offset = (big(raw) - int_min::<T>()) % span;
-            from_big(big(l) + offset).unwrap()
-        }
-    }
-}
-
-/// Values in `[l, u]`. See [`int_in_range`].
-pub(crate) fn int_value_in<T: PropInt>(bounds: (T, T)) -> impl Strategy<Value = T> {
-    (any::<u8>(), any::<T>()).prop_map(move |(s, r)| int_in_range(s, r, bounds))
-}
-
-/// Ordered bounds whose endpoints are biased towards the edges of the type.
-pub(crate) fn int_bounds<T: PropInt>() -> impl Strategy<Value = (T, T)> {
-    any::<(u8, T, u8, T)>().prop_map(|(sa, a, sb, b)| {
-        let (a, b) = (pick_int(sa, a), pick_int(sb, b));
-        if a <= b { (a, b) } else { (b, a) }
-    })
+/// Values in `[l, u]`, biased towards the endpoints.
+pub(crate) fn int_value_in<T: PropInt>((l, u): (T, T)) -> impl Strategy<Value = T> {
+    prop_oneof![Just(l), Just(u), T::range(l, u)]
 }
 
 /// Bounds whose magnitude sits within one of `T::MAX / n`,
@@ -257,8 +270,22 @@ pub(crate) fn int_boundary_bounds<T: PropInt>(n: usize, delta: u8, shape: u8) ->
 // ---------------------------------------------------------------------------------------------
 
 /// Float atoms. Exact values are obtained with [`rat`].
-pub(crate) trait PropFloat: Float {}
-impl<T: Float> PropFloat for T {}
+pub(crate) trait PropFloat: Float {
+    /// Arbitrary finite or infinite values (not NaN), spread over every exponent.
+    fn any_float() -> BoxedStrategy<Self>;
+}
+
+macro_rules! impl_prop_float {
+    ($($ty:ident)+) => {$(
+        impl PropFloat for $ty {
+            fn any_float() -> BoxedStrategy<Self> {
+                use prop::num::$ty::*;
+                (POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE).boxed()
+            }
+        }
+    )+};
+}
+impl_prop_float!(f32 f64);
 
 /// The exact value of `v`, or `None` if `v` is not finite.
 pub(crate) fn rat<T: PropFloat>(v: T) -> Option<RBig> {
@@ -269,75 +296,53 @@ pub(crate) fn abs_rat(v: RBig) -> RBig {
     if v < RBig::ZERO { -v } else { v }
 }
 
-/// An arbitrary value, biased towards the edges of the type
-/// and towards `MAX / 2^j`, where overflow thresholds of size-`2^j` aggregates sit.
-pub(crate) fn pick_float<T: PropFloat>(sel: u8, j: i32, frac: f64, neg: bool) -> T {
-    let cast = |v: f64| <T as num::NumCast>::from(v).unwrap();
-    let one = <T as num::One>::one();
-    let two = one + one;
+/// Arbitrary values, biased towards the edges of the type and towards moderate magnitudes.
+pub(crate) fn float_value<T: PropFloat>() -> impl Strategy<Value = T> {
     let max = <T as num::Float>::max_value();
     let min_pos = <T as num::Float>::min_positive_value();
-    let v = match sel % 10 {
-        0 => <T as num::Zero>::zero(),
-        1 => max,
-        2 => min_pos,
-        3 => min_pos * <T as num::Float>::epsilon(), // smallest subnormal
-        4 => <T as num::Float>::infinity(),
-        5 => one,
-        6 | 7 => max / num::Float::powi(two, j) * cast(frac),
-        8 => cast(frac * 1000.0),
-        _ => cast(frac),
-    };
-    if neg { -v } else { v }
+    let one = <T as num::One>::one();
+    let edges = [
+        <T as num::Zero>::zero(),
+        one,
+        max,
+        min_pos,
+        min_pos * <T as num::Float>::epsilon(), // smallest subnormal
+        <T as num::Float>::infinity(),
+    ];
+    let edges = edges.iter().flat_map(|&v| [v, -v]).collect::<Vec<_>>();
+    prop_oneof![
+        prop::sample::select(edges),
+        T::any_float(),
+        (-1000f64..1000.).prop_map(|v| <T as num::NumCast>::from(v).unwrap()),
+    ]
 }
 
-/// Values for [`pick_float`].
-pub(crate) fn float_value<T: PropFloat>() -> impl Strategy<Value = T> {
-    // small powers j put MAX / 2^j near the overflow threshold of datasets of size ~2^j
-    (
-        any::<u8>(),
-        prop_oneof![1i32..8, 0i32..64],
-        0.5f64..1.0,
-        any::<bool>(),
-    )
-        .prop_map(|(s, j, f, n)| pick_float::<T>(s, j, f, n))
-}
-
-/// Ordered bounds whose endpoints are biased towards the edges of the type. May be infinite.
-pub(crate) fn float_bounds<T: PropFloat>() -> impl Strategy<Value = (T, T)> {
-    (float_value::<T>(), float_value::<T>()).prop_map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
-}
-
-/// A value in `[l, u]`, biased towards the endpoints and tiny magnitudes.
-pub(crate) fn float_in_range<T: PropFloat>(sel: u8, frac: f64, (l, u): (T, T)) -> T {
-    let clamp = |v: T| {
-        if v < l {
-            l
-        } else if v > u {
-            u
-        } else {
-            v
+/// The value a fraction `frac` of the way from `l` to `u`, rounded to the nearest float.
+/// Falls back to `l` if either bound is not finite.
+fn lerp<T: PropFloat>((l, u): (T, T), frac: f64) -> T {
+    match (rat(l), rat(u)) {
+        (Some(lr), Some(ur)) => {
+            let frac = RBig::try_from(frac).unwrap();
+            // nearest rounding of a value in [l, u] stays in [l, u]
+            num::clamp(T::from_rational(lr.clone() + frac * (ur - lr)), l, u)
         }
-    };
-    let tiny = <T as num::Float>::min_positive_value() * <T as num::Float>::epsilon();
-    match sel % 6 {
-        0 => l,
-        1 => u,
-        2 => clamp(tiny),
-        3 => clamp(-tiny),
-        _ => match (rat(l), rat(u)) {
-            (Some(lr), Some(ur)) => {
-                let frac = RBig::try_from(frac).unwrap();
-                clamp(T::from_rational(lr.clone() + frac * (ur - lr)))
-            }
-            _ => l,
-        },
+        _ => l,
     }
 }
 
-/// Values in `[l, u]`. See [`float_in_range`].
-pub(crate) fn float_value_in<T: PropFloat>(bounds: (T, T)) -> impl Strategy<Value = T> + Clone {
-    (any::<u8>(), 0.0f64..=1.0).prop_map(move |(s, f)| float_in_range(s, f, bounds))
+/// Values in `[l, u]`, biased towards the endpoints and tiny magnitudes.
+///
+/// Interpolates exactly rather than using a float range,
+/// because `u - l` may overflow when the bounds are huge.
+pub(crate) fn float_value_in<T: PropFloat>((l, u): (T, T)) -> impl Strategy<Value = T> + Clone {
+    let tiny = <T as num::Float>::min_positive_value() * <T as num::Float>::epsilon();
+    prop_oneof![
+        1 => Just(l),
+        1 => Just(u),
+        1 => Just(num::clamp(tiny, l, u)),
+        1 => Just(num::clamp(-tiny, l, u)),
+        2 => (0.0f64..=1.0).prop_map(move |f| lerp((l, u), f)),
+    ]
 }
 
 // ---------------------------------------------------------------------------------------------
