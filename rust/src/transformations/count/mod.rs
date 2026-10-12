@@ -261,3 +261,6 @@ impl<Q: InfCast<u32>> CountByMetric for L01InfDistance<AbsoluteDistance<Q>> {
 
 #[cfg(all(test, feature = "partials"))]
 mod test;
+
+#[cfg(test)]
+mod test_props;

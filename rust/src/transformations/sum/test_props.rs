@@ -20,13 +20,7 @@ use super::int::can_int_sum_overflow;
 use super::*;
 use crate::domains::Bounds;
 use crate::metrics::IntDistance;
-use crate::traits::{Float, Integer};
-
-type TestResult = Result<(), TestCaseError>;
-
-fn ok<T>(r: Fallible<T>) -> Result<T, TestCaseError> {
-    r.map_err(|e| TestCaseError::fail(format!("{e:?}")))
-}
+use crate::test_props::*;
 
 /// A dataset, plus a list of edits used to derive a neighboring dataset.
 #[derive(Debug, Clone)]
@@ -34,166 +28,30 @@ struct Case<T> {
     bounds: (T, T),
     sized: bool,
     data: Vec<T>,
-    /// (op, position, in-domain value)
-    edits: Vec<(u8, u16, T)>,
+    edits: Vec<Edit<T>>,
     /// extra input distances to probe the stability map with
     distances: Vec<IntDistance>,
-}
-
-/// Applies `edits` to `x`, returning the neighbor and an upper bound on its distance from `x`.
-///
-/// Sized datasets only receive changes that preserve length:
-/// a substitution, or (when `ordered`) a deletion at one position and insertion at another.
-/// Each costs 2 under both `SymmetricDistance` and `InsertDeleteDistance`.
-/// Unsized datasets receive single insertions or deletions, costing 1 each.
-fn neighbor<T: Clone>(
-    x: &[T],
-    edits: &[(u8, u16, T)],
-    sized: bool,
-    ordered: bool,
-) -> (Vec<T>, IntDistance) {
-    let mut x2 = x.to_vec();
-    let mut k = 0;
-    for (op, pos, value) in edits {
-        let pos = *pos as usize;
-        if sized {
-            if x2.is_empty() {
-                continue;
-            }
-            let i = pos % x2.len();
-            if ordered && op % 2 == 1 {
-                x2.remove(i);
-                let j = (pos / 7) % (x2.len() + 1);
-                x2.insert(j, value.clone());
-            } else {
-                x2[i] = value.clone();
-            }
-            k += 2;
-        } else if op % 2 == 0 || x2.is_empty() {
-            x2.insert(pos % (x2.len() + 1), value.clone());
-            k += 1;
-        } else {
-            x2.remove(pos % x2.len());
-            k += 1;
-        }
-    }
-    (x2, k)
-}
-
-fn distance() -> impl Strategy<Value = IntDistance> {
-    prop_oneof![0u32..8, any::<u32>(), Just(u32::MAX), Just(u32::MAX - 1)]
 }
 
 // ---------------------------------------------------------------------------------------------
 // Integers
 // ---------------------------------------------------------------------------------------------
 
-trait SumInt:
-    Integer
-    + Arbitrary
-    + num::Bounded
-    + Into<IBig>
-    + TryFrom<IBig>
-    + MakeSum<SymmetricDistance>
-    + MakeSum<InsertDeleteDistance>
-{
-}
-impl<T> SumInt for T where
-    T: Integer
-        + Arbitrary
-        + num::Bounded
-        + Into<IBig>
-        + TryFrom<IBig>
-        + MakeSum<SymmetricDistance>
-        + MakeSum<InsertDeleteDistance>
-{
-}
-
-fn big<T: SumInt>(v: T) -> IBig {
-    v.into()
-}
-
-fn from_big<T: SumInt>(v: IBig) -> Option<T> {
-    <T as TryFrom<IBig>>::try_from(v).ok()
-}
-
-fn int_min<T: SumInt>() -> IBig {
-    big(<T as num::Bounded>::min_value())
-}
-
-fn int_max<T: SumInt>() -> IBig {
-    big(<T as num::Bounded>::max_value())
-}
-
-fn clamp_big<T: SumInt>(v: IBig) -> IBig {
-    v.clamp(int_min::<T>(), int_max::<T>())
-}
-
-fn abs_big(v: IBig) -> IBig {
-    if v < IBig::ZERO { -v } else { v }
-}
-
-/// An arbitrary value, biased towards the edges of the type.
-fn pick_int<T: SumInt>(sel: u8, raw: T) -> T {
-    let v = match sel % 8 {
-        0 => return raw,
-        1 => int_min::<T>(),
-        2 => int_max::<T>(),
-        3 => int_min::<T>() + IBig::ONE,
-        4 => int_max::<T>() - IBig::ONE,
-        5 => IBig::ZERO,
-        _ => big(raw) % IBig::from(33),
-    };
-    from_big(clamp_big::<T>(v)).unwrap()
-}
-
-/// A value in `[l, u]`.
-fn int_in_range<T: SumInt>(sel: u8, raw: T, (l, u): (T, T)) -> T {
-    match sel % 4 {
-        0 => l,
-        1 => u,
-        _ => {
-            let span = big(u) - big(l) + IBig::ONE;
-            let offset = (big(raw) - int_min::<T>()) % span;
-            from_big(big(l) + offset).unwrap()
-        }
-    }
-}
-
-/// Bounds whose magnitude sits within one of `T::MAX / n`,
-/// so that datasets of size near `n` straddle the overflow threshold.
-fn int_boundary_bounds<T: SumInt>(n: usize, delta: u8, shape: u8) -> (T, T) {
-    let mag = clamp_big::<T>(int_max::<T>() / IBig::from(n) + IBig::from(delta) - IBig::ONE);
-    let (l, u) = match shape % 4 {
-        0 => (IBig::ZERO, mag.clone()),
-        1 => (-mag.clone(), IBig::ZERO),
-        2 => (-mag.clone(), mag.clone()),
-        _ => (IBig::from(-1), mag.clone()),
-    };
-    match (from_big(l), from_big(u)) {
-        (Some(l), Some(u)) => (l, u),
-        // unsigned types can't represent negative bounds
-        _ => (from_big(IBig::ZERO).unwrap(), from_big(mag).unwrap()),
-    }
-}
+trait SumInt: PropInt + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
+impl<T> SumInt for T where T: PropInt + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
 
 fn int_case<T: SumInt>() -> impl Strategy<Value = Case<T>> {
-    let generic = (any::<(u8, T, u8, T)>(), 0usize..24).prop_map(|((sa, a, sb, b), len)| {
-        let (a, b) = (pick_int(sa, a), pick_int(sb, b));
-        (if a <= b { (a, b) } else { (b, a) }, len)
-    });
+    let generic = (int_bounds::<T>(), 0usize..24);
     let boundary = (1usize..=64, 0u8..3, any::<u8>(), 0usize..3)
         .prop_map(|(n, delta, shape, dn)| (int_boundary_bounds::<T>(n, delta, shape), n + dn - 1));
 
     prop_oneof![generic, boundary].prop_flat_map(|(bounds, len)| {
-        let value =
-            move || (any::<u8>(), any::<T>()).prop_map(move |(s, r)| int_in_range(s, r, bounds));
         (
             any::<bool>(),
-            prop::collection::vec(value(), len),
+            prop::collection::vec(int_value_in(bounds), len),
             0u8..4,
-            prop::collection::vec((any::<u8>(), any::<u16>(), value()), 0..5),
-            prop::collection::vec(distance(), 0..4),
+            edits(int_value_in(bounds)),
+            distances(),
         )
             .prop_map(move |(sized, mut data, arrange, edits, distances)| {
                 // orderings that stress saturation in the order-dependent sums
@@ -342,116 +200,28 @@ where
     Ok(())
 }
 
-macro_rules! int_props {
-    ($($name:ident: $ty:ty),+ $(,)?) => {
-        proptest! {
-            $(#[test]
-            fn $name(case in int_case::<$ty>()) {
-                check_int(case)?;
-            })+
-        }
-    };
-}
-
-int_props! {
-    prop_sum_u8: u8, prop_sum_u16: u16, prop_sum_u32: u32,
-    prop_sum_u64: u64, prop_sum_u128: u128, prop_sum_usize: usize,
-    prop_sum_i8: i8, prop_sum_i16: i16, prop_sum_i32: i32,
-    prop_sum_i64: i64, prop_sum_i128: i128, prop_sum_isize: isize,
-}
+for_each_int!(ints, int_case, check_int);
 
 // ---------------------------------------------------------------------------------------------
 // Floats
 // ---------------------------------------------------------------------------------------------
 
-trait SumFloat: Float + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
-impl<T> SumFloat for T where T: Float + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
-
-fn rat<T: SumFloat>(v: T) -> Option<RBig> {
-    v.into_rational().ok()
-}
-
-fn abs_rat(v: RBig) -> RBig {
-    if v < RBig::ZERO { -v } else { v }
-}
-
-/// An arbitrary value, biased towards the edges of the type
-/// and towards the overflow thresholds of the float sums.
-fn pick_float<T: SumFloat>(sel: u8, j: i32, frac: f64, neg: bool) -> T {
-    let cast = |v: f64| <T as num::NumCast>::from(v).unwrap();
-    let one = <T as num::One>::one();
-    let two = one + one;
-    let max = <T as num::Float>::max_value();
-    let min_pos = <T as num::Float>::min_positive_value();
-    let v = match sel % 10 {
-        0 => <T as num::Zero>::zero(),
-        1 => max,
-        2 => min_pos,
-        3 => min_pos * <T as num::Float>::epsilon(), // smallest subnormal
-        4 => <T as num::Float>::infinity(),
-        5 => one,
-        // just below MAX / 2^j, covering both MAX / n and the pairwise magnitude limit
-        6 | 7 => max / num::Float::powi(two, j) * cast(frac),
-        8 => cast(frac * 1000.0),
-        _ => cast(frac),
-    };
-    if neg { -v } else { v }
-}
-
-/// A value in `[l, u]`.
-fn float_in_range<T: SumFloat>(sel: u8, frac: f64, (l, u): (T, T)) -> T {
-    let clamp = |v: T| {
-        if v < l {
-            l
-        } else if v > u {
-            u
-        } else {
-            v
-        }
-    };
-    let tiny = <T as num::Float>::min_positive_value() * <T as num::Float>::epsilon();
-    match sel % 6 {
-        0 => l,
-        1 => u,
-        2 => clamp(tiny),
-        3 => clamp(-tiny),
-        _ => match (rat(l), rat(u)) {
-            (Some(lr), Some(ur)) => {
-                let frac = RBig::try_from(frac).unwrap();
-                clamp(T::from_rational(lr.clone() + frac * (ur - lr)))
-            }
-            _ => l,
-        },
-    }
+trait SumFloat: PropFloat + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance> {}
+impl<T> SumFloat for T where
+    T: PropFloat + MakeSum<SymmetricDistance> + MakeSum<InsertDeleteDistance>
+{
 }
 
 fn float_case<T: SumFloat>() -> impl Strategy<Value = Case<T>> {
-    // small powers j put MAX / 2^j near the overflow threshold of datasets of size ~2^j
-    let value = || {
-        (
-            any::<u8>(),
-            prop_oneof![1i32..8, 0i32..64],
-            0.5f64..1.0,
-            any::<bool>(),
-        )
-    };
-    let bounds = (value(), value()).prop_map(|((s1, j1, f1, n1), (s2, j2, f2, n2))| {
-        let (a, b) = (
-            pick_float::<T>(s1, j1, f1, n1),
-            pick_float::<T>(s2, j2, f2, n2),
-        );
-        if a <= b { (a, b) } else { (b, a) }
-    });
+    let bounds = float_bounds::<T>();
 
     (bounds, prop_oneof![0usize..8, 0usize..70]).prop_flat_map(|(bounds, len)| {
-        let value =
-            (any::<u8>(), 0.0f64..=1.0).prop_map(move |(s, f)| float_in_range(s, f, bounds));
         (
             any::<bool>(),
-            prop::collection::vec(value.clone(), len),
+            prop::collection::vec(float_value_in(bounds), len),
             0u8..4,
-            prop::collection::vec((any::<u8>(), any::<u16>(), value), 0..5),
-            prop::collection::vec(distance(), 0..4),
+            edits(float_value_in(bounds)),
+            distances(),
         )
             .prop_map(move |(sized, mut data, arrange, edits, distances)| {
                 // orderings that stress saturation and cancellation
@@ -603,17 +373,9 @@ where
     Ok(())
 }
 
+for_each_float!(floats, float_case, check_float);
+
 proptest! {
-    #[test]
-    fn prop_sum_f32(case in float_case::<f32>()) {
-        check_float(case)?;
-    }
-
-    #[test]
-    fn prop_sum_f64(case in float_case::<f64>()) {
-        check_float(case)?;
-    }
-
     /// C7: when the dataset exceeds `size_limit`, a random subset of `size_limit` records is summed.
     /// The output must be within the range of any such subset sum, up to rounding error.
     #[test]

@@ -191,5 +191,8 @@ pub mod traits;
 pub mod transformations;
 pub mod utilities;
 
+#[cfg(test)]
+pub(crate) mod test_props;
+
 #[cfg(all(feature = "polars", feature = "contrib"))]
 pub mod polars;
