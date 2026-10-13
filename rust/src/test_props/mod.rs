@@ -7,6 +7,7 @@
 //! * exact `IBig`/`RBig` references for integer and float atoms
 //! * value and bounds generators biased towards the edges of each type
 //! * macros to instantiate a generic check across every integer or float type
+//! * ([`noise`]) references and generators for noise-adding measurements
 //!
 //! References are always computed in `IBig`/`RBig`, never in the atomic type,
 //! so that overflow or rounding in the atomic type can't hide a failure.
@@ -25,7 +26,9 @@ use crate::metrics::{
     ChangeOneDistance, EventLevelMetric, HammingDistance, InsertDeleteDistance, IntDistance,
     SymmetricDistance,
 };
-use crate::traits::{Float, Integer};
+use crate::traits::{CastInternalRational, Float, Integer};
+
+pub(crate) mod noise;
 
 pub(crate) type TestResult = Result<(), TestCaseError>;
 
@@ -409,16 +412,29 @@ pub(crate) fn int_boundary_bounds<T: PropInt>(n: usize, delta: u8, shape: u8) ->
 
 /// Float atoms. Exact values are obtained with [`rat`].
 pub(crate) trait PropFloat: Float {
+    /// The exponent `k` where `2^k` is the smallest positive subnormal.
+    const K_MIN: i32;
     /// Arbitrary finite or infinite values (not NaN), spread over every exponent.
     fn any_float() -> BoxedStrategy<Self>;
+    /// The next representable value towards positive infinity.
+    fn next_up(self) -> Self;
+    /// The next representable value towards negative infinity.
+    fn next_down(self) -> Self;
 }
 
 macro_rules! impl_prop_float {
     ($($ty:ident)+) => {$(
         impl PropFloat for $ty {
+            const K_MIN: i32 = $ty::MIN_EXP - $ty::MANTISSA_DIGITS as i32;
             fn any_float() -> BoxedStrategy<Self> {
                 use prop::num::$ty::*;
                 (POSITIVE | NEGATIVE | NORMAL | SUBNORMAL | ZERO | INFINITE).boxed()
+            }
+            fn next_up(self) -> Self {
+                $ty::next_up(self)
+            }
+            fn next_down(self) -> Self {
+                $ty::next_down(self)
             }
         }
     )+};
@@ -481,6 +497,144 @@ pub(crate) fn float_value_in<T: PropFloat>((l, u): (T, T)) -> impl Strategy<Valu
         1 => Just(num::clamp(-tiny, l, u)),
         2 => (0.0f64..=1.0).prop_map(move |f| lerp((l, u), f)),
     ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Exact values, rounding and distances
+// ---------------------------------------------------------------------------------------------
+
+/// Values with an exact rational value.
+pub(crate) trait ExactRat {
+    /// The exact value of `self`, or `None` if `self` is not finite.
+    fn exact(&self) -> Option<RBig>;
+}
+
+macro_rules! impl_exact_rat_int {
+    ($($ty:ty)+) => {$(
+        impl ExactRat for $ty {
+            fn exact(&self) -> Option<RBig> {
+                Some(RBig::from(IBig::from(*self)))
+            }
+        }
+    )+};
+}
+impl_exact_rat_int!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
+
+impl ExactRat for f32 {
+    fn exact(&self) -> Option<RBig> {
+        rat(*self)
+    }
+}
+
+impl ExactRat for f64 {
+    fn exact(&self) -> Option<RBig> {
+        rat(*self)
+    }
+}
+
+impl ExactRat for IBig {
+    fn exact(&self) -> Option<RBig> {
+        Some(RBig::from(self.clone()))
+    }
+}
+
+impl ExactRat for RBig {
+    fn exact(&self) -> Option<RBig> {
+        Some(self.clone())
+    }
+}
+
+/// The exact L1 distance between `x` and `x2`,
+/// or `None` if their lengths differ or any value is not finite.
+pub(crate) fn l1_exact<T: ExactRat>(x: &[T], x2: &[T]) -> Option<RBig> {
+    if x.len() != x2.len() {
+        return None;
+    }
+    x.iter().zip(x2).try_fold(RBig::ZERO, |s, (a, b)| {
+        Some(s + abs_rat(a.exact()? - b.exact()?))
+    })
+}
+
+/// `2^k`, exactly.
+pub(crate) fn pow2(k: i32) -> RBig {
+    let p = RBig::from(IBig::ONE << k.unsigned_abs() as usize);
+    if k < 0 { RBig::ONE / p } else { p }
+}
+
+/// `x * 2^k`, exactly.
+pub(crate) fn mul_2k(x: &RBig, k: i32) -> RBig {
+    x * pow2(k)
+}
+
+/// The index `i` of the multiple `i * 2^k` nearest to `x`, with ties rounding towards positive infinity.
+pub(crate) fn round_to_2k(x: &RBig, k: i32) -> IBig {
+    (mul_2k(x, -k) + RBig::from_parts(IBig::ONE, 2u8.into())).floor()
+}
+
+/// Whether `out` is `exact` rounded up: the smallest `f64` (or infinity) at or above `exact`.
+pub(crate) fn is_rounded_up(out: f64, exact: &RBig) -> bool {
+    match rat(out) {
+        Some(o) => o >= *exact && rat(out.next_down()).is_none_or(|below| below < *exact),
+        None => out == f64::INFINITY && rat(f64::MAX).unwrap() < *exact,
+    }
+}
+
+/// Whether `out` is at least `exact`, where `None` stands for positive infinity.
+pub(crate) fn at_least(out: f64, exact: &Option<RBig>) -> bool {
+    match (rat(out), exact) {
+        (_, _) if out == f64::INFINITY => true,
+        (Some(o), Some(e)) => o >= *e,
+        _ => false,
+    }
+}
+
+/// Distance types of metrics on numbers, such as the `Q` in `AbsoluteDistance<Q>`.
+pub(crate) trait PropDistance: ExactRat + Clone + Debug + 'static {
+    /// The smallest value at or above `r`, or `None` if no finite value is.
+    fn round_up(r: &RBig) -> Option<Self>;
+    /// Arbitrary values, including negative and non-finite ones where the type has them.
+    fn value() -> BoxedStrategy<Self>;
+}
+
+macro_rules! impl_prop_distance_int {
+    ($($ty:ty)+) => {$(
+        impl PropDistance for $ty {
+            fn round_up(r: &RBig) -> Option<Self> {
+                from_big(r.ceil())
+            }
+            fn value() -> BoxedStrategy<Self> {
+                int_value::<$ty>().boxed()
+            }
+        }
+    )+};
+}
+impl_prop_distance_int!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize);
+
+macro_rules! impl_prop_distance_float {
+    ($($ty:ty)+) => {$(
+        impl PropDistance for $ty {
+            fn round_up(r: &RBig) -> Option<Self> {
+                let v = <$ty>::from_rational(r.clone());
+                let v = if rat(v).is_some_and(|e| e < *r) { v.next_up() } else { v };
+                v.is_finite().then_some(v)
+            }
+            fn value() -> BoxedStrategy<Self> {
+                prop_oneof![9 => float_value::<$ty>(), 1 => Just(<$ty>::NAN)].boxed()
+            }
+        }
+    )+};
+}
+impl_prop_distance_float!(f32 f64);
+
+impl PropDistance for RBig {
+    fn round_up(r: &RBig) -> Option<Self> {
+        Some(r.clone())
+    }
+    fn value() -> BoxedStrategy<Self> {
+        (any::<i64>(), 1u16..1000)
+            .prop_map(|(n, d)| RBig::from_parts(n.into(), d.into()))
+            .boxed()
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -560,5 +714,50 @@ mod test {
         let b = HashMap::from([("a", 1i32), ("c", 4)]);
         let (l0, l1, linf) = map_distance_l01inf(&a, &b);
         assert_eq!((l0, l1, linf), (3, IBig::from(7), IBig::from(4)));
+    }
+
+    #[test]
+    fn test_exact_rounding() {
+        let r = |n: i64, d: u64| RBig::from_parts(n.into(), d.into());
+        // ties round up, including for negative values
+        assert_eq!(round_to_2k(&r(1, 2), 0), IBig::ONE);
+        assert_eq!(round_to_2k(&r(-1, 2), 0), IBig::ZERO);
+        assert_eq!(round_to_2k(&r(-3, 2), 0), IBig::from(-1));
+        assert_eq!(round_to_2k(&r(5, 1), 2), IBig::ONE);
+        assert_eq!(round_to_2k(&r(6, 1), 2), IBig::from(2));
+        assert_eq!(round_to_2k(&r(3, 8), -2), IBig::from(2));
+        assert_eq!(mul_2k(&r(3, 1), -2), r(3, 4));
+
+        assert!(is_rounded_up(0.0, &RBig::ZERO));
+        assert!(is_rounded_up(0.5, &r(1, 2)));
+        assert!(!is_rounded_up(1.0, &r(1, 2)));
+        // half of the smallest subnormal rounds up to it
+        let half_sub = rat(f64::from_bits(1)).unwrap() / RBig::from(2);
+        assert!(is_rounded_up(f64::from_bits(1), &half_sub));
+        assert!(!is_rounded_up(0.0, &half_sub));
+        assert!(is_rounded_up(
+            f64::INFINITY,
+            &(rat(f64::MAX).unwrap() + RBig::ONE)
+        ));
+        assert!(!is_rounded_up(f64::INFINITY, &rat(f64::MAX).unwrap()));
+
+        let third = <f64 as PropDistance>::round_up(&r(1, 3)).unwrap();
+        assert!(is_rounded_up(third, &r(1, 3)));
+        assert_eq!(<f64 as PropDistance>::round_up(&r(1, 2)), Some(0.5));
+        assert_eq!(
+            <f32 as PropDistance>::round_up(&rat(f64::MAX).unwrap()),
+            None
+        );
+        assert_eq!(<u8 as PropDistance>::round_up(&r(509, 2)), Some(255));
+        assert_eq!(<u8 as PropDistance>::round_up(&r(511, 2)), None);
+        assert_eq!(<f64 as PropFloat>::K_MIN, -1074);
+        assert_eq!(<f32 as PropFloat>::K_MIN, -149);
+    }
+
+    #[test]
+    fn test_l1_exact() {
+        assert_eq!(l1_exact(&[1i8, -128], &[-1, 127]), Some(RBig::from(257)));
+        assert_eq!(l1_exact(&[0.5f64], &[f64::INFINITY]), None);
+        assert_eq!(l1_exact(&[0.5f64], &[]), None);
     }
 }

@@ -17,6 +17,9 @@ use crate::{
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod test_props;
+
 #[cfg(feature = "ffi")]
 pub(crate) mod ffi;
 
