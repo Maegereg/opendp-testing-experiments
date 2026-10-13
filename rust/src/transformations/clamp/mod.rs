@@ -54,3 +54,6 @@ where
 
 #[cfg(all(test, feature = "partials"))]
 mod test;
+
+#[cfg(test)]
+mod test_props;

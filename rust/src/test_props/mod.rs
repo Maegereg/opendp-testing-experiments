@@ -21,7 +21,10 @@ use proptest::prelude::*;
 use proptest::sample::Index;
 
 use crate::error::Fallible;
-use crate::metrics::IntDistance;
+use crate::metrics::{
+    ChangeOneDistance, EventLevelMetric, HammingDistance, InsertDeleteDistance, IntDistance,
+    SymmetricDistance,
+};
 use crate::traits::{Float, Integer};
 
 pub(crate) type TestResult = Result<(), TestCaseError>;
@@ -122,6 +125,141 @@ pub(crate) fn symmetric_distance<T: Hash + Eq>(x: &[T], x2: &[T]) -> usize {
             a.abs_diff(b)
         })
         .sum()
+}
+
+/// Values with an exact notion of identity, used to compare records across datasets.
+///
+/// Floats are identified by their bits, so `-0.0` and `0.0` are distinct records.
+/// Any deterministic row function respects this identity.
+pub(crate) trait ExactKey {
+    type Key: Hash + Eq + Debug;
+    fn key(&self) -> Self::Key;
+}
+
+macro_rules! impl_exact_key_self {
+    ($($ty:ty)+) => {$(
+        impl ExactKey for $ty {
+            type Key = Self;
+            fn key(&self) -> Self {
+                self.clone()
+            }
+        }
+    )+};
+}
+impl_exact_key_self!(u8 u16 u32 u64 u128 usize i8 i16 i32 i64 i128 isize bool char String);
+
+impl ExactKey for f32 {
+    type Key = u32;
+    fn key(&self) -> u32 {
+        self.to_bits()
+    }
+}
+
+impl ExactKey for f64 {
+    type Key = u64;
+    fn key(&self) -> u64 {
+        self.to_bits()
+    }
+}
+
+impl<A: ExactKey, B: ExactKey> ExactKey for (A, B) {
+    type Key = (A::Key, B::Key);
+    fn key(&self) -> Self::Key {
+        (self.0.key(), self.1.key())
+    }
+}
+
+/// The exact identity of each record in `x`.
+pub(crate) fn keys<T: ExactKey>(x: &[T]) -> Vec<T::Key> {
+    x.iter().map(ExactKey::key).collect()
+}
+
+/// The exact symmetric distance between `x` and `x2`, comparing records by [`ExactKey`].
+pub(crate) fn symmetric_distance_by_key<T: ExactKey>(x: &[T], x2: &[T]) -> usize {
+    symmetric_distance(&keys(x), &keys(x2))
+}
+
+/// The exact insert-delete distance between `x` and `x2`:
+/// `|x| + |x2| - 2 LCS(x, x2)`, comparing records by [`ExactKey`].
+pub(crate) fn insert_delete_distance<T: ExactKey>(x: &[T], x2: &[T]) -> usize {
+    let (a, b) = (keys(x), keys(x2));
+    // prev[j] is the length of the longest common subsequence of the rows of `a` seen so far and b[..j]
+    let mut prev = vec![0usize; b.len() + 1];
+    for ai in &a {
+        let mut cur = vec![0usize; b.len() + 1];
+        for (j, bj) in b.iter().enumerate() {
+            cur[j + 1] = if ai == bj {
+                prev[j] + 1
+            } else {
+                cur[j].max(prev[j + 1])
+            };
+        }
+        prev = cur;
+    }
+    a.len() + b.len() - 2 * prev[b.len()]
+}
+
+/// The number of positions at which `x` and `x2` differ, or `None` if their lengths differ.
+pub(crate) fn hamming_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+    (x.len() == x2.len()).then(|| x.iter().zip(x2).filter(|(a, b)| a.key() != b.key()).count())
+}
+
+/// The smallest number of changes to make `x` and `x2` equal as multisets,
+/// or `None` if their lengths differ.
+pub(crate) fn change_one_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+    (x.len() == x2.len()).then(|| symmetric_distance_by_key(x, x2) / 2)
+}
+
+/// Dataset metrics with an exact distance, for testing dataset-to-dataset transformations.
+/// Whether a metric requires a known size is given by [`crate::metrics::MicrodataMetric::SIZED`].
+pub(crate) trait PropDatasetMetric: EventLevelMetric {
+    /// The exact distance between `x` and `x2`,
+    /// or `None` if the metric doesn't relate them (lengths differ under a bounded metric).
+    fn exact_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize>;
+
+    /// Applies `edits` to `x` (see [`neighbor`]),
+    /// returning the neighbor and an upper bound on its distance from `x` under this metric.
+    fn neighbor<T: Clone>(x: &[T], edits: &[Edit<T>], sized: bool) -> (Vec<T>, IntDistance);
+}
+
+impl PropDatasetMetric for SymmetricDistance {
+    fn exact_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+        Some(symmetric_distance_by_key(x, x2))
+    }
+    fn neighbor<T: Clone>(x: &[T], edits: &[Edit<T>], sized: bool) -> (Vec<T>, IntDistance) {
+        neighbor(x, edits, sized, false)
+    }
+}
+
+impl PropDatasetMetric for InsertDeleteDistance {
+    fn exact_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+        Some(insert_delete_distance(x, x2))
+    }
+    fn neighbor<T: Clone>(x: &[T], edits: &[Edit<T>], sized: bool) -> (Vec<T>, IntDistance) {
+        neighbor(x, edits, sized, true)
+    }
+}
+
+impl PropDatasetMetric for ChangeOneDistance {
+    fn exact_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+        change_one_distance(x, x2)
+    }
+    fn neighbor<T: Clone>(x: &[T], edits: &[Edit<T>], _sized: bool) -> (Vec<T>, IntDistance) {
+        // each substitution costs 2 under the symmetric distance, so 1 change
+        let (x2, k) = neighbor(x, edits, true, false);
+        (x2, k / 2)
+    }
+}
+
+impl PropDatasetMetric for HammingDistance {
+    fn exact_distance<T: ExactKey>(x: &[T], x2: &[T]) -> Option<usize> {
+        hamming_distance(x, x2)
+    }
+    fn neighbor<T: Clone>(x: &[T], edits: &[Edit<T>], _sized: bool) -> (Vec<T>, IntDistance) {
+        // substitutions in place, each changing at most one position
+        let (x2, k) = neighbor(x, edits, true, false);
+        (x2, k / 2)
+    }
 }
 
 /// Input distances to probe a stability or privacy map with:
@@ -395,6 +533,25 @@ mod test {
         assert_eq!(symmetric_distance(&[1, 1, 2], &[1, 2, 2, 3]), 3);
         assert_eq!(symmetric_distance::<i32>(&[], &[]), 0);
         assert_eq!(symmetric_distance(&[1, 2], &[2, 1]), 0);
+    }
+
+    #[test]
+    fn test_dataset_distances() {
+        // LCS of [1, 2, 3, 4] and [2, 4, 3] has length 2, e.g. [2, 3]
+        assert_eq!(insert_delete_distance(&[1, 2, 3, 4], &[2, 4, 3]), 3);
+        assert_eq!(insert_delete_distance::<i32>(&[], &[1, 2]), 2);
+        assert_eq!(insert_delete_distance(&[1, 2], &[2, 1]), 2);
+        assert_eq!(hamming_distance(&[1, 2, 3], &[1, 3, 2]), Some(2));
+        assert_eq!(hamming_distance(&[1], &[1, 2]), None);
+        assert_eq!(change_one_distance(&[1, 2, 3], &[3, 2, 1]), Some(0));
+        assert_eq!(change_one_distance(&[1, 2, 3], &[1, 2, 4]), Some(1));
+
+        // floats are compared by bits
+        assert_eq!(symmetric_distance_by_key(&[-0.0f64], &[0.0]), 2);
+        assert_eq!(
+            insert_delete_distance(&[f64::INFINITY], &[f64::INFINITY]),
+            0
+        );
     }
 
     #[test]
