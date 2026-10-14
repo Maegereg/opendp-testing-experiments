@@ -177,6 +177,22 @@ pub(crate) fn keys<T: ExactKey>(x: &[T]) -> Vec<T::Key> {
     x.iter().map(ExactKey::key).collect()
 }
 
+/// The number of occurrences of each record in `x`, comparing records by [`ExactKey`].
+pub(crate) fn multiset_of<T: ExactKey>(x: &[T]) -> HashMap<T::Key, usize> {
+    let mut counts = HashMap::new();
+    x.iter()
+        .for_each(|v| *counts.entry(v.key()).or_insert(0) += 1);
+    counts
+}
+
+/// Whether every record of `a` occurs at least as often in `b`.
+pub(crate) fn is_sub_multiset<T: ExactKey>(a: &[T], b: &[T]) -> bool {
+    let b = multiset_of(b);
+    multiset_of(a)
+        .iter()
+        .all(|(k, n)| b.get(k).is_some_and(|m| n <= m))
+}
+
 /// The exact symmetric distance between `x` and `x2`, comparing records by [`ExactKey`].
 pub(crate) fn symmetric_distance_by_key<T: ExactKey>(x: &[T], x2: &[T]) -> usize {
     symmetric_distance(&keys(x), &keys(x2))
@@ -263,6 +279,21 @@ impl PropDatasetMetric for HammingDistance {
         let (x2, k) = neighbor(x, edits, true, false);
         (x2, k / 2)
     }
+}
+
+/// Dataset lengths near `target` (within 2 either side), plus empty and small arbitrary lengths,
+/// so that transformations with a size parameter see each side of it.
+pub(crate) fn lengths(target: usize) -> impl Strategy<Value = usize> {
+    prop_oneof![
+        3 => target.saturating_sub(2)..=target.saturating_add(2),
+        1 => Just(0usize),
+        1 => 0usize..40,
+    ]
+}
+
+/// Uniform probabilities over `n` categories, for chi-square tests of uniformity.
+pub(crate) fn uniform_probs(n: usize) -> Vec<f64> {
+    vec![1.0 / n as f64; n]
 }
 
 /// Input distances to probe a stability or privacy map with:
@@ -706,6 +737,17 @@ mod test {
             insert_delete_distance(&[f64::INFINITY], &[f64::INFINITY]),
             0
         );
+    }
+
+    #[test]
+    fn test_multisets() {
+        let m = multiset_of(&[1.0f64, -0.0, 0.0, 1.0]);
+        assert_eq!(m.len(), 3);
+        assert_eq!(m[&1.0f64.to_bits()], 2);
+        assert!(is_sub_multiset(&[1, 1], &[1, 2, 1]));
+        assert!(!is_sub_multiset(&[1, 1], &[1, 2]));
+        assert!(is_sub_multiset::<i32>(&[], &[]));
+        assert!(!is_sub_multiset(&[f64::NAN], &[f64::NAN.copysign(-1.0)]));
     }
 
     #[test]
