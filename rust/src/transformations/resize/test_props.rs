@@ -107,16 +107,6 @@ fn size() -> impl Strategy<Value = usize> {
     ]
 }
 
-/// A dataset of length `len`. Long datasets repeat a short random pattern, to keep generation cheap.
-fn dataset<T: ResizeAtom>(value: BoxedStrategy<T>, len: usize) -> BoxedStrategy<Vec<T>> {
-    if len <= 64 {
-        return prop::collection::vec(value, len).boxed();
-    }
-    prop::collection::vec(value, 1..16)
-        .prop_map(move |pattern| pattern.iter().cycle().take(len).cloned().collect())
-        .boxed()
-}
-
 /// Datasets with values from `value`, a constant from `constant`, and lengths near the target size.
 fn case<T: ResizeAtom>(
     bounds: Option<(T, T)>,
@@ -546,29 +536,17 @@ fn probe_resize_allocation_failure() {
 // The probe runs in a child process, since the abort can't be caught.
 #[test]
 fn test_resize_unallocatable_size_aborts() {
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--ignored",
-            "--exact",
-            "transformations::resize::test_props::probe_resize_allocation_failure",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let start = std::time::Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if start.elapsed() > std::time::Duration::from_secs(60) {
-            child.kill().unwrap();
-            panic!("the allocation probe didn't finish within 60 seconds");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    };
-    let mut stderr = String::new();
-    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
-    assert!(!status.success(), "expected the probe to abort, got {status:?}");
-    assert!(stderr.contains("memory allocation"), "unexpected failure: {stderr}");
+    let (status, stderr) = run_ignored_test(
+        "transformations::resize::test_props::probe_resize_allocation_failure",
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the allocation probe didn't finish within 60 seconds");
+    assert!(
+        !status.success(),
+        "expected the probe to abort, got {status:?}"
+    );
+    assert!(
+        stderr.contains("memory allocation"),
+        "unexpected failure: {stderr}"
+    );
 }

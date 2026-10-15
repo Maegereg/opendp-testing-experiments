@@ -296,6 +296,66 @@ pub(crate) fn uniform_probs(n: usize) -> Vec<f64> {
     vec![1.0 / n as f64; n]
 }
 
+/// A dataset of length `len` with values from `value`.
+/// Long datasets repeat a short random pattern, to keep generation cheap.
+pub(crate) fn dataset<T: Clone + Debug + 'static>(
+    value: BoxedStrategy<T>,
+    len: usize,
+) -> BoxedStrategy<Vec<T>> {
+    if len <= 64 {
+        return prop::collection::vec(value, len).boxed();
+    }
+    prop::collection::vec(value, 1..16)
+        .prop_map(move |pattern| pattern.iter().cycle().take(len).cloned().collect())
+        .boxed()
+}
+
+/// Checks that a row-by-row transformation kept one output row per input row,
+/// and that `row(&x[i], &out[i])` holds for every row.
+pub(crate) fn check_row_wise<T, U>(
+    x: &[T],
+    out: &[U],
+    row: impl Fn(&T, &U) -> Result<(), String>,
+) -> TestResult {
+    prop_assert_eq!(x.len(), out.len(), "the number of rows changed");
+    for (i, (v, o)) in x.iter().zip(out).enumerate() {
+        row(v, o).map_err(|e| TestCaseError::fail(format!("row {i}: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Runs the ignored test `name` (its full path) in a child process of this test binary.
+/// Returns its exit status and stderr, or `None` if it was still running after `timeout`,
+/// in which case it is killed.
+///
+/// For probes that abort or hang the process, which can't be observed in-process.
+pub(crate) fn run_ignored_test(
+    name: &str,
+    timeout: std::time::Duration,
+) -> Option<(std::process::ExitStatus, String)> {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > timeout {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+    Some((status, stderr))
+}
+
 /// Input distances to probe a stability or privacy map with:
 /// small values, arbitrary values, and the extremes of the distance type.
 pub(crate) fn distance() -> impl Strategy<Value = IntDistance> {
@@ -530,6 +590,45 @@ pub(crate) fn float_value_in<T: PropFloat>((l, u): (T, T)) -> impl Strategy<Valu
     ]
 }
 
+/// Percentages of NaN for [`nan_heavy_float`]: none, some, half, mostly, or all.
+pub(crate) fn nan_percent() -> impl Strategy<Value = u32> {
+    prop::sample::select(vec![0, 10, 50, 90, 100])
+}
+
+/// Values from [`float_value`] (including ±0, ±inf and subnormals), NaN `nan_percent`% of the time.
+pub(crate) fn nan_heavy_float<T: PropFloat>(nan_percent: u32) -> BoxedStrategy<T> {
+    let nan = <T as num::Float>::nan();
+    match nan_percent {
+        0 => float_value::<T>().boxed(),
+        100.. => Just(nan).boxed(),
+        p => prop_oneof![p => Just(nan), 100 - p => float_value::<T>()].boxed(),
+    }
+}
+
+/// The number of `samples` in each of `k` equal-width bins over `[lower, upper)`.
+/// Bin edges are exact, so the bins are correct even when `upper - lower` overflows.
+///
+/// # Panics
+/// If a sample is not in `[lower, upper)`.
+pub(crate) fn bin_counts<T: PropFloat>(
+    samples: &[T],
+    (lower, upper): (T, T),
+    k: usize,
+) -> Vec<u64> {
+    let (l, u) = (rat(lower).unwrap(), rat(upper).unwrap());
+    let scale = RBig::from(k) / (u - l.clone());
+    let mut counts = vec![0u64; k];
+    for &s in samples {
+        let bin = rat(s)
+            .map(|s| ((s - l.clone()) * scale.clone()).floor())
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|&i| i < k)
+            .unwrap_or_else(|| panic!("{s:?} is outside [{lower:?}, {upper:?})"));
+        counts[bin] += 1;
+    }
+    counts
+}
+
 // ---------------------------------------------------------------------------------------------
 // Exact values, rounding and distances
 // ---------------------------------------------------------------------------------------------
@@ -748,6 +847,35 @@ mod test {
         assert!(!is_sub_multiset(&[1, 1], &[1, 2]));
         assert!(is_sub_multiset::<i32>(&[], &[]));
         assert!(!is_sub_multiset(&[f64::NAN], &[f64::NAN.copysign(-1.0)]));
+    }
+
+    #[test]
+    fn test_row_wise() {
+        let same = |a: &i32, b: &i32| (a == b).then_some(()).ok_or(format!("{a} != {b}"));
+        assert!(check_row_wise(&[1, 2], &[1, 2], same).is_ok());
+        assert!(check_row_wise(&[1, 2], &[1, 3], same).is_err());
+        assert!(check_row_wise(&[1, 2], &[1], same).is_err());
+    }
+
+    #[test]
+    fn test_bin_counts() {
+        assert_eq!(
+            bin_counts(&[0.0, 0.25, 0.5, 0.999], (0.0f64, 1.0), 4),
+            [1, 1, 1, 1]
+        );
+        // the width overflows, but the bins are still exact
+        let max = f64::MAX;
+        assert_eq!(
+            bin_counts(&[-max, -1.0, 0.0, max / 2.0], (-max, max), 2),
+            [2, 2]
+        );
+        assert_eq!(bin_counts(&[-0.0f32], (-1.0, 1.0), 2), [0, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside")]
+    fn test_bin_counts_rejects_upper() {
+        bin_counts(&[1.0], (0.0f64, 1.0), 4);
     }
 
     #[test]
