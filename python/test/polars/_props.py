@@ -15,9 +15,6 @@ and nulls distinctly from every value.
 from __future__ import annotations
 
 import math
-import os
-import struct
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -25,21 +22,19 @@ import pytest
 
 pl = pytest.importorskip("polars")
 
-from hypothesis import HealthCheck, settings  # noqa: E402
 from hypothesis import strategies as st  # noqa: E402
 
 import opendp.prelude as dp  # noqa: E402
 
-dp.enable_features("contrib")
+# registers and loads the hypothesis profiles, and provides exact row comparison
+from test._props_common import (  # noqa: E402, F401
+    Row,
+    row_multiset,
+    symmetric_distance,
+    value_key,
+)
 
-for _name, _examples in [("opendp", 100), ("stress", 2000)]:
-    settings.register_profile(
-        _name,
-        deadline=None,  # FFI calls and Polars collection have unpredictable latency
-        max_examples=_examples,
-        suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
-    )
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "opendp"))
+dp.enable_features("contrib")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -53,8 +48,6 @@ SCHEMA = {
     "k": pl.Int64,  # non-null grouping key
     "flag": pl.Boolean,  # nullable
 }
-
-Row = tuple
 
 
 def frame_domain(margins: Sequence[Any] = ()):
@@ -115,29 +108,10 @@ def neighbors(draw, data: list[Row], max_distance: int = 4) -> tuple[list[Row], 
 # ---------------------------------------------------------------------------------------------
 
 
-def value_key(v: Any) -> tuple:
-    """An exact identity for a value: floats by bits, and types kept distinct."""
-    if v is None:
-        return ("null",)
-    if isinstance(v, float):
-        return ("float", struct.pack(">d", v))
-    return (type(v).__name__, v)
-
-
-def row_multiset(rows_: Sequence[Row]) -> Counter:
-    return Counter(tuple(value_key(v) for v in row) for row in rows_)
-
-
 def frame_rows(frame) -> list[Row]:
     """The rows of a DataFrame or LazyFrame, in the column order of :data:`SCHEMA` where present."""
     df = frame.collect() if isinstance(frame, pl.LazyFrame) else frame
     return df.rows()
-
-
-def symmetric_distance(a: Sequence[Row], b: Sequence[Row]) -> int:
-    """The exact symmetric distance between two datasets, viewed as multisets of rows."""
-    ma, mb = row_multiset(a), row_multiset(b)
-    return sum(((ma - mb) + (mb - ma)).values())
 
 
 # ---------------------------------------------------------------------------------------------
