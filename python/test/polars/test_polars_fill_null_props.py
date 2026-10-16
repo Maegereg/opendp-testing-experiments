@@ -18,19 +18,11 @@ Properties (labels match the comments below):
 * E: queries built through the Context API respect the privacy budget and carry no data
 * F: large frames and extreme margins
 
-Tests named ``test_finding_*``, and branches marked FINDING, pin issues in the library:
-
-* a NaN fill (a literal, or a column that may be NaN) is declared as not NaN,
-  so one null row can turn a noisy sum into noise around 0: a privacy violation
-* when Polars coerces the column to the fill's type (int to float or string),
-  OpenDP still declares the original dtype
-* a fill that is a failing cast is declared non-null, so nulls remain in a "non-null" column
-* in a grouped aggregation with known lengths, ``filter(...).fill_null(...)`` (and
-  ``fill_nan``) forgets that the filter changed the lengths: a sum is charged as if nothing
-  were filtered, so a change to one row can move it beyond its sensitivity, a privacy
-  violation. ``dp.sum`` fills nulls itself, so ``filter(...).dp.sum(...)`` is affected
-  even without a fill; and ``dp.mean`` is charged infinite loss
-* a boolean column filled with a number is accepted, though Polars can't run it
+Known issues in the library are listed in ``KNOWN_ISSUES``. Each has minimal tests of the correct
+behavior, marked with ``known_issue`` (strict xfail), and the properties skip the cases it
+affects while it's listed. When an issue is fixed, its tests pass and fail the run:
+remove the issue from ``KNOWN_ISSUES``, with its markers. Two are privacy violations:
+a NaN fill, and sums of filtered columns when lengths are public.
 """
 
 from __future__ import annotations
@@ -65,6 +57,7 @@ from test.polars._props import (  # noqa: E402
     fills,
     frame_domain,
     frame_rows,
+    known_issue,
     margin_lists,
     neighbors,
     row_key,
@@ -77,6 +70,29 @@ from test.polars._props import (  # noqa: E402
 )
 
 Margin = dp.polars.Margin
+
+#: Known issues in the library. See the module docstring.
+KNOWN_ISSUES = {
+    "nan-fill": "a NaN fill (a literal, or a column that may be NaN) is declared as not NaN, "
+    "so one null row can turn a noisy sum into noise around 0: a privacy violation",
+    "dtype-coercion": "when Polars coerces the column to the fill's type, "
+    "OpenDP still declares the original dtype",
+    "nullable-cast": "a cast that can fail is declared non-null, so it's accepted as a fill, "
+    "and nulls remain in a column declared non-null",
+    "filtered-sum": "with known lengths, a fill after an expression filter (explicit, or "
+    "dp.sum's own) forgets the filter, so the sum is under-charged: a privacy violation",
+    "filtered-mean": "with known lengths, dp.mean after filter-then-fill is charged "
+    "infinite loss",
+    "bool-numeric-fill": "a boolean column filled with a number is accepted, "
+    "though Polars can't run it",
+    "member-frame-margin": "LazyFrameDomain.member fails on every frame when the domain has "
+    "a margin with no grouping columns",
+}
+
+
+def issue(key: str, raises=AssertionError):
+    return known_issue(KNOWN_ISSUES, key, raises)
+
 
 #: Queries through the Context API search for a noise scale, which is slow,
 #: so they run a fifth as many examples as the active profile.
@@ -110,9 +126,9 @@ def _is_literal(fill: Fill) -> bool:
     return not isinstance(fill.expr, pl.Expr) or "col(" not in str(fill.expr)
 
 
-def _expect_accepted(target: Target, fill: Fill) -> bool:
-    # FINDING: a fill that is a failing cast is wrongly declared non-null, so it's accepted
-    return target.kind == OK and (fill.accepted or fill.undeclared_nulls)
+def _expect_accepted(target: Target, fill: Fill, polars_dtype) -> bool:
+    """Whether OpenDP should accept the fill: a supported target and fill, which Polars can plan."""
+    return target.kind == OK and fill.accepted and polars_dtype is not None
 
 
 def _dtype(plan, name: str):
@@ -149,8 +165,8 @@ def _coerced(lf, target: Target, fill: Fill) -> bool:
     return _dtype(_plan(lf, target, fill), target.name) != before
 
 
-def _nan_finding(target: Target, fill: Fill, dtype) -> bool:
-    """Whether the fill may add NaN to a column that isn't declared as NaN (FINDING)."""
+def _nan_fill(target: Target, fill: Fill, dtype) -> bool:
+    """Whether the fill may add NaN to a column that may not otherwise be NaN."""
     return dtype is not None and dtype.is_float() and fill.nan and not target.nan
 
 
@@ -167,15 +183,21 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
     plan = _plan(lf, target, fill)
 
     # A: accepted exactly for supported, non-categorical targets and non-null, row-wise fills
+    # that Polars can plan
     t = _stable(domain, plan)
-    expected = _expect_accepted(target, fill)
+    actual = _dtype(plan, target.name)
+    if t is not None and fill.undeclared_nulls and "nullable-cast" in KNOWN_ISSUES:
+        event("known issue: nullable-cast")
+        return
+    if t is not None and actual is None and "bool-numeric-fill" in KNOWN_ISSUES:
+        event("known issue: bool-numeric-fill")
+        return
+    expected = _expect_accepted(target, fill, actual)
     assert (t is not None) == expected, (
         f"{target}.fill_null({fill}) should be {'accepted' if expected else 'rejected'}"
     )
     if t is None:
         return
-    if fill.undeclared_nulls:
-        event("FINDING: nullable cast fill accepted")
 
     # A: the output column is declared non-null and unbounded; other columns are unchanged
     series, declared = _declared(t.output_domain, target.name)
@@ -188,24 +210,19 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
             )
 
     # A: the declared dtype is Polars' dtype
-    actual = _dtype(plan, target.name)
-    if actual is None:
-        # FINDING: Polars can't fill a boolean with a number, but OpenDP accepts it
-        event("FINDING: Polars can't plan this fill")
-    elif _coerced(lf, target, fill):
-        # FINDING: Polars coerces the column to the fill's type, but the declared dtype is kept
-        event("FINDING: coerced dtype not declared")
-        assert declared != actual
+    if _coerced(lf, target, fill) and "dtype-coercion" in KNOWN_ISSUES:
+        event("known issue: dtype-coercion")
     else:
         assert declared == actual
 
-    # A: the declared column admits NaN if the target or fill may be NaN
-    if actual is not None and actual.is_float() and target.nan:
-        assert series.element_domain.nan
-    if _nan_finding(target, fill, actual) and declared == actual:
-        # FINDING: a NaN fill isn't declared
-        event("FINDING: NaN fill not declared")
-        assert not series.element_domain.nan
+        # A: the declared column admits NaN if the target or fill may be NaN
+        if actual.is_float() and target.nan:
+            assert series.element_domain.nan
+        if _nan_fill(target, fill, actual):
+            if "nan-fill" in KNOWN_ISSUES:
+                event("known issue: nan-fill")
+            else:
+                assert series.element_domain.nan
 
     # A: margins are unchanged, except those grouping by the filled column, which can merge
     # groups: they're dropped, and what remains is only what the other margins imply
@@ -238,9 +255,9 @@ def test_polars_fill_null_matches_polars(data, target: Target, fill: Fill):
 
     actual = _dtype(plan, target.name)
     if actual is None:
-        # FINDING: accepted, but Polars fails on every frame, empty or not
-        with pytest.raises(pl.exceptions.PolarsError):
-            t(lf).collect()
+        # the fill should have been rejected
+        assert "bool-numeric-fill" in KNOWN_ISSUES, "accepted a fill Polars can't plan"
+        event("known issue: bool-numeric-fill")
         return
 
     # B: exactly the frame Polars computes, row by row
@@ -267,18 +284,17 @@ def test_polars_fill_null_matches_polars(data, target: Target, fill: Fill):
         else "some filled"
     )
 
-    # B: the output is a member of the output domain, unless a pinned finding applies
-    coerced = _coerced(lf, target, fill)
-    nan_added = (
-        _nan_finding(target, fill, actual)
-        and actual.is_float()
-        and filled.is_nan().any()
-    )
-    if coerced:
-        event("FINDING: coerced output isn't a member")
-    if nan_added:
-        event("FINDING: NaN-filled output isn't a member")
-    assert _member(t.output_domain, out) == (not coerced and not nan_added)
+    # B: the output is a member of the output domain, except where a known issue applies
+    issues = set()
+    if _coerced(lf, target, fill):
+        issues.add("dtype-coercion")
+    if _nan_fill(target, fill, actual) and filled.is_nan().any():
+        issues.add("nan-fill")
+    if issues & KNOWN_ISSUES.keys():
+        for key in sorted(issues & KNOWN_ISSUES.keys()):
+            event(f"known issue: {key}")
+    else:
+        assert _member(t.output_domain, out)
 
 
 #: Fills that keep an integer column integral.
@@ -452,12 +468,13 @@ def test_polars_fill_null_sum_sensitivity(data, target: Target, fill: Fill, comp
 
     neighbor = data + [_null_row()]
     a, b = release(data), release(neighbor)
-    if math.isnan(plain(neighbor)) and not math.isnan(plain(data)):
-        # FINDING: the filled NaN poisons the sum, which is released as 0, however large it was
-        event("FINDING: NaN fill poisons the sum")
-        assert b == 0.0
-        if abs(a) > 5:
-            event("FINDING: NaN fill violates the sensitivity")
+    if (
+        math.isnan(plain(neighbor))
+        and not math.isnan(plain(data))
+        and "nan-fill" in KNOWN_ISSUES
+    ):
+        # the filled NaN poisons the sum, which is released as 0, however large it was
+        event("known issue: nan-fill")
         return
     event("sensitivity checked")
     assert abs(a - b) <= 5 + 1e-9, f"{a} vs {b}"
@@ -553,29 +570,13 @@ def test_polars_fill_null_grouped_losses(fill: Fill, pred, bounds, invariant):
         fill_then_filter = loss(make(i.fill_null(fill.expr).filter(pred)))
         filter_then_fill = loss(make(i.filter(pred).fill_null(fill.expr)))
         assert unfiltered < math.inf
-        if invariant != "lengths":
-            assert filter_then_fill == fill_then_filter < math.inf
+        # with known lengths, a fill after the filter forgets the filter: the mean is
+        # charged infinite loss, and the sum (or dp.sum, which fills itself) too little
+        key = "filtered-mean" if name == "dp.mean" else "filtered-sum"
+        if invariant == "lengths" and key in KNOWN_ISSUES:
+            event(f"known issue: {key}")
             continue
-
-        # FINDING: with known lengths, a fill after the filter forgets the filter
-        if name == "dp.mean":
-            # the mean releases its length without noise, but the length's accounting
-            # sees the filter
-            event("FINDING: filter-then-fill mean is charged infinite loss")
-            assert fill_then_filter < math.inf
-            assert filter_then_fill == math.inf
-        elif name == "dp.sum":
-            # dp.sum fills nulls itself, after any filter, so either order (or no explicit
-            # fill at all) is charged as if nothing were filtered
-            event("FINDING: dp.sum after a filter is charged as unfiltered")
-            assert fill_then_filter == filter_then_fill == unfiltered
-            assert loss(make(i.filter(pred))) == unfiltered
-        else:
-            event("FINDING: filter-then-fill sum is charged as unfiltered")
-            assert filter_then_fill == unfiltered
-            assert fill_then_filter >= unfiltered
-            if filter_then_fill < fill_then_filter:
-                event("FINDING: filter-then-fill sum is charged less")
+        assert filter_then_fill == fill_then_filter < math.inf
 
 
 #: Ways to release the sum of a filtered column with noise of a given scale: an explicit
@@ -646,17 +647,16 @@ def test_polars_fill_null_filtered_sum_sensitivity(
     b = dict(release(to_lazyframe(other)).collect().rows())
     assert a.keys() == b.keys()
     shift = sum(abs(a[g] - b[g]) for g in a)
-    if shift <= sensitivity:
-        event("sensitivity holds")
+    if how not in _SOUND_SUMS and "filtered-sum" in KNOWN_ISSUES:
+        # a fill after the filter (explicit, or dp.sum's own) forgets the filter, so the sum
+        # is charged as if every row contributed a value within the bounds, though a filtered
+        # row contributes nothing
+        if shift > sensitivity:
+            event(f"known issue: filtered-sum ({how})")
         return
-
-    # FINDING: a fill after the filter (explicit, or dp.sum's own) forgets the filter, so
-    # the sum is charged as if every row contributed a value within the bounds,
-    # though a filtered row contributes nothing
-    event(f"FINDING: {how} moves beyond its sensitivity")
-    assert how not in _SOUND_SUMS
-    assert (
-        bounds[0] > 0 or bounds[1] < 0 or max(map(abs, bounds)) > bounds[1] - bounds[0]
+    event("sensitivity checked")
+    assert shift <= sensitivity, (
+        f"{a} vs {b}: moved by {shift}, sensitivity {sensitivity}"
     )
 
 
@@ -736,10 +736,10 @@ def test_polars_fill_null_large_frame():
     assert time.monotonic() - start < 30
     assert out["i"].null_count() == 0
     assert out.equals(plan.collect())
-    # (membership is checked without margins: LazyFrameDomain.member fails on any frame
-    # when the domain has a margin with no grouping columns)
-    t_plain = dp.t.make_stable_lazyframe(frame_domain(), dp.symmetric_distance(), plan)
-    assert _member(t_plain.output_domain, t_plain(lf))
+    # while membership fails with a margin with no grouping columns, check it without margins
+    if "member-frame-margin" in KNOWN_ISSUES:
+        t = dp.t.make_stable_lazyframe(frame_domain(), dp.symmetric_distance(), plan)
+    assert _member(t.output_domain, t(lf))
 
     released = zero_noise(domain, plan.select(pl.col("i").dp.sum((-5, 5))))(lf)
     assert released.collect().item() == plan.select(pl.col("i").sum()).collect().item()
@@ -854,53 +854,72 @@ def test_polars_fill_null_drops_bounds(fill):
         )
 
 
-def test_finding_nan_fill_breaks_privacy():
-    """FINDING: ``f`` is declared non-NaN, and ``f.fill_null(nan)`` stays declared non-NaN.
-    One null row then turns the clipped sum into NaN, which is released as 0 (plus noise),
-    so neighbors' releases differ by the whole sum, not the clipping bound."""
+#: A NaN literal, and a column that may be NaN, as fills for ``f`` (declared as not NaN).
+_NAN_FILL_CASES = pytest.mark.parametrize(
+    "fill, null_row",
+    [
+        (math.nan, (None, None, None, 0, None, None)),
+        (pl.col("g").fill_null(0.0), (None, None, None, 0, None, math.nan)),
+    ],
+    ids=["NaN literal", "NaN-able column"],
+)
+
+
+@issue("nan-fill")
+@_NAN_FILL_CASES
+def test_polars_fill_null_declares_nan(fill, null_row):
+    """A: a fill that may be NaN makes the declared column admit NaN."""
+    t = dp.t.make_stable_lazyframe(
+        frame_domain(),
+        dp.symmetric_distance(),
+        to_lazyframe([]).with_columns(pl.col("f").fill_null(fill)),
+    )
+    assert t.output_domain.get_series_domain("f").element_domain.nan
+
+
+@issue("nan-fill")
+@_NAN_FILL_CASES
+def test_polars_fill_null_nan_sum_sensitivity(fill, null_row):
+    """D: a clipped noisy sum after a NaN fill is rejected, or moves by at most the clipping
+    bound (5) when one row is added. Known issue: the NaN isn't declared, so the query is
+    accepted at ε = 1, and one null row turns the sum into NaN, released as 0: with 99 rows
+    of 5.0, the releases are 495 and 0."""
     domain = frame_domain([Margin(by=[], max_length=100)])
     data = [(0, 5.0, "a", 0, True, None)] * 99
-    neighbor = data + [_null_row()]
-    for fill in [math.nan, pl.col("g").fill_null(0.0)]:
-        if not isinstance(fill, float):
-            neighbor = data + [(None, None, None, 0, None, math.nan)]
-        plan = to_lazyframe([]).select(
-            pl.col("f").fill_null(fill).clip(-5.0, 5.0).sum().dp.noise()
-        )
-        t = dp.t.make_stable_lazyframe(
-            domain,
-            dp.symmetric_distance(),
-            to_lazyframe([]).with_columns(pl.col("f").fill_null(fill)),
-        )
-        assert not t.output_domain.get_series_domain("f").element_domain.nan
-        assert not _member(t.output_domain, t(to_lazyframe(neighbor)))
-
-        m = dp.m.make_private_lazyframe(
-            domain, dp.symmetric_distance(), dp.max_divergence(), plan, global_scale=1.0
-        )
-        assert m.map(1) == pytest.approx(1.0)
-        release = zero_noise(domain, plan)
-        a = release(to_lazyframe(data)).collect().item()
-        b = release(to_lazyframe(neighbor)).collect().item()
-        assert (a, b) == (495.0, 0.0)  # the sensitivity is 5
+    plan = to_lazyframe([]).select(
+        pl.col("f").fill_null(fill).clip(-5.0, 5.0).sum().dp.noise()
+    )
+    release = build(lambda: zero_noise(domain, plan))
+    if release is None:
+        return
+    a = release(to_lazyframe(data)).collect().item()
+    b = release(to_lazyframe(data + [null_row])).collect().item()
+    assert abs(a - b) <= 5, f"releases {a} and {b}"
 
 
-def test_finding_fill_dtype_coercion():
-    """FINDING: Polars casts the column to the fill's type, but OpenDP keeps the original dtype,
-    so the output isn't a member of the output domain, and a float sum is summarized as
-    Integer Laplace."""
+@issue("dtype-coercion")
+@pytest.mark.parametrize(
+    "fill",
+    [0.5, "z", pl.col("f").fill_null(0.0)],
+    ids=["float", "string", "float column"],
+)
+def test_polars_fill_null_declares_coerced_dtype(fill):
+    """A: when Polars casts the column to the fill's type, the fill is rejected, or the
+    declared dtype is Polars' dtype, and the output is a member of the output domain."""
     lf = to_lazyframe([(None, None, None, 0, None, None), (3, 1.5, "a", 1, True, 0.0)])
-    for fill, actual in [
-        (0.5, pl.Float64),
-        ("z", pl.String),
-        (pl.col("f").fill_null(0.0), pl.Float64),
-    ]:
-        plan = lf.with_columns(pl.col("i").fill_null(fill))
-        t = dp.t.make_stable_lazyframe(frame_domain(), dp.symmetric_distance(), plan)
-        assert _declared(t.output_domain, "i")[1] == pl.Int64
-        assert t(lf).collect()["i"].dtype == actual
-        assert not _member(t.output_domain, t(lf))
+    plan = lf.with_columns(pl.col("i").fill_null(fill))
+    t = _stable(frame_domain(), plan)
+    if t is None:
+        return
+    assert _declared(t.output_domain, "i")[1] == t(lf).collect()["i"].dtype
+    assert _member(t.output_domain, t(lf))
 
+
+@issue("dtype-coercion")
+def test_polars_fill_null_coerced_sum_summary():
+    """D: a sum over an integer column filled with a float is summarized as float noise,
+    which is what it adds. Known issue: it's summarized as Integer Laplace."""
+    lf = to_lazyframe([(None, None, None, 0, None, None), (3, 1.5, "a", 1, True, 0.0)])
     context = dp.Context.compositor(
         data=lf,
         privacy_unit=dp.unit_of(contributions=1),
@@ -909,34 +928,57 @@ def test_finding_fill_dtype_coercion():
         margins=[Margin(by=(), max_length=100)],
     )
     query = context.query().select(pl.col("i").fill_null(0.5).dp.sum((-5, 5)))
-    assert query.summarize()["distribution"].to_list() == ["Integer Laplace"]
     assert query.release().collect()["i"].dtype == pl.Float64
+    assert query.summarize()["distribution"].to_list() == ["Float Laplace"]
 
 
-def test_finding_nullable_cast_fill():
-    """FINDING: a cast that can fail is declared non-null when its input is non-null
-    (``make_expr_cast`` keeps the input's nullability), so it passes as a fill,
-    and nulls remain in a column declared non-null."""
-    lf = to_lazyframe(
+def _cast_lf():
+    return to_lazyframe(
         [(None, None, "a", 0, None, None), (None, None, "7", 1, None, None)]
     )
+
+
+@issue("nullable-cast")
+def test_polars_cast_declares_nullable():
+    """A: a cast that can fail is declared nullable, since failures become null.
+    Known issue: ``make_expr_cast`` keeps its input's nullability, so casting a non-null
+    column is declared non-null, though "a" becomes null."""
+    lf = _cast_lf()
     cast = pl.col("s").fill_null("z").cast(pl.Int64)
-    t_cast = dp.t.make_stable_lazyframe(
+    t = dp.t.make_stable_lazyframe(
         frame_domain(), dp.symmetric_distance(), lf.with_columns(cast.alias("x"))
     )
-    assert not t_cast.output_domain.get_series_domain("x").nullable
-    assert t_cast(lf).collect()["x"].to_list() == [None, 7]
-
-    t = dp.t.make_stable_lazyframe(
-        frame_domain(),
-        dp.symmetric_distance(),
-        lf.with_columns(pl.col("i").fill_null(cast)),
-    )
-    assert not t.output_domain.get_series_domain("i").nullable
-    assert t(lf).collect()["i"].to_list() == [None, 7]
-    assert not _member(t.output_domain, t(lf))
+    assert t(lf).collect()["x"].to_list() == [None, 7]
+    assert t.output_domain.get_series_domain("x").nullable
 
 
+@issue("nullable-cast")
+def test_polars_fill_null_rejects_nullable_cast():
+    """A: a fill that can be null, such as a cast that can fail, is rejected.
+    Known issue: the cast is declared non-null, so it's accepted, and nulls remain
+    in a column declared non-null."""
+    cast = pl.col("s").fill_null("z").cast(pl.Int64)
+    plan = _cast_lf().with_columns(pl.col("i").fill_null(cast))
+    assert _stable(frame_domain(), plan) is None
+
+
+def _filtered_sum_frames(column):
+    """Neighbors with the same group lengths: the first row changes, and passes ``> 1``."""
+    index = list(SCHEMA).index(column)
+
+    def frame(values):
+        rows_ = []
+        for v in values:
+            row = [None] * len(SCHEMA)
+            row[3], row[index] = 0, v
+            rows_.append(tuple(row))
+        return to_lazyframe(rows_)
+
+    one, three = (1.0, 3.0) if column == "g" else (1, 3)
+    return frame([one, three, three]), frame([three] * 3)
+
+
+@issue("filtered-sum")
 @pytest.mark.parametrize(
     "fill_then_filter, filter_then_fill, column",
     [
@@ -953,30 +995,15 @@ def test_finding_nullable_cast_fill():
     ],
     ids=["fill_null", "fill_nan"],
 )
-def test_finding_filter_then_fill_undercharges_sum(
+def test_polars_filter_then_fill_sum_sensitivity(
     fill_then_filter, filter_then_fill, column
 ):
-    """FINDING (privacy violation): in a grouped aggregation, the fill's output context is
-    its input's, so a preceding filter's effect is forgotten. With known lengths, a sum
-    after filter-then-fill is charged as if nothing were filtered: changing one row
-    is assumed to move it by at most ``upper - lower``. But a changed row can switch from
-    filtered out (contributing nothing) to kept: with bounds (2, 3), the sum moves by 3,
-    while the claimed sensitivity is 1."""
+    """D: with known lengths, a sum after filter-then-fill allows for the filter: changing one
+    row can switch it from filtered out (contributing nothing) to kept, which moves a sum
+    clipped to (2, 3) by 3. Known issue (privacy violation): the fill's output context is its
+    input's, so the filter is forgotten, and the sum is calibrated for a sensitivity of 1."""
     domain = _grouped_domain("lengths")
-    index = list(SCHEMA).index(column)
-
-    def frame(values):
-        rows_ = []
-        for v in values:
-            row = [None] * len(SCHEMA)
-            row[3], row[index] = 0, v
-            rows_.append(tuple(row))
-        return to_lazyframe(rows_)
-
-    # neighbors with the same group lengths: the first row changes, and passes the filter
-    a, b = frame([1, 3, 3]), frame([3, 3, 3])
-    if column == "g":
-        a, b = frame([1.0, 3.0, 3.0]), frame([3.0, 3.0, 3.0])
+    a, b = _filtered_sum_frames(column)
 
     def plan(c, scale=None):
         return to_lazyframe([]).group_by("k").agg(c.clip(2, 3).sum().dp.noise(scale))
@@ -991,18 +1018,19 @@ def test_finding_filter_then_fill_undercharges_sum(
         release = zero_noise(domain, plan(c))
         assert release(a).collect()[column].item() == pytest.approx(6)
         assert release(b).collect()[column].item() == pytest.approx(9)
-
-    # the change moves the sum by 3: fill-then-filter allows for it, filter-then-fill doesn't
-    assert sensitivity(fill_then_filter) == pytest.approx(6)
-    assert sensitivity(filter_then_fill) == pytest.approx(1)
+    assert sensitivity(fill_then_filter) >= 3
+    assert sensitivity(filter_then_fill) >= 3
 
 
-def test_finding_filtered_dp_sum_undercharged():
-    """FINDING (privacy violation): ``dp.sum`` fills nulls (and NaNs) itself before clipping,
-    after any filter, so the same reset applies with no fill in the query, even to a
-    non-null column. With known lengths, ``x.filter(x > 1).dp.sum((2, 3))`` is calibrated
-    for a sensitivity of 1, but changing one row moves it by 3."""
+@issue("filtered-sum")
+def test_polars_filtered_dp_sum_sensitivity():
+    """D: with known lengths, ``x.filter(x > 1).dp.sum((2, 3))`` allows for the filter, in the
+    measurement and in the Context API's noise scale: changing one row moves it by 3.
+    Known issue (privacy violation): ``dp.sum`` fills nulls (and NaNs) itself before clipping,
+    after the filter, so the filter is forgotten even with no fill in the query, on a non-null
+    column: the sum is calibrated for a sensitivity of 1."""
     schema = {"x": pl.Int64, "k": pl.Int64}
+    margin = Margin(by=[pl.col("k")], invariant="lengths", max_length=50, max_groups=3)
     domain = dp.with_margin(
         dp.lazyframe_domain(
             [
@@ -1010,7 +1038,7 @@ def test_finding_filtered_dp_sum_undercharged():
                 dp.series_domain("k", dp.atom_domain(T="i64")),
             ]
         ),
-        Margin(by=[pl.col("k")], invariant="lengths", max_length=50, max_groups=3),
+        margin,
     )
     a = pl.LazyFrame({"x": [1, 3, 3], "k": [0, 0, 0]}, schema=schema)
     b = pl.LazyFrame({"x": [3, 3, 3], "k": [0, 0, 0]}, schema=schema)
@@ -1026,16 +1054,12 @@ def test_finding_filtered_dp_sum_undercharged():
         )
 
     release = private(x.filter(x > 1).dp.sum((2, 3)), global_scale=0.0)
-    assert (release(a).collect()["x"].item(), release(b).collect()["x"].item()) == (
-        6,
-        9,
-    )
-    # the loss at noise scale 1 is the sensitivity: 1, though the sum moves by 3
-    assert private(x.filter(x > 1).dp.sum((2, 3), scale=1.0)).map(2) == 1.0
-    # an explicit clip and sum accounts for the filter
+    assert release(a).collect()["x"].item() == 6
+    assert release(b).collect()["x"].item() == 9
+    # an explicit clip and sum allows for the filter: the loss at noise scale 1 is 6
     assert private(x.filter(x > 1).clip(2, 3).sum().dp.noise(scale=1.0)).map(2) == 6.0
+    assert private(x.filter(x > 1).dp.sum((2, 3), scale=1.0)).map(2) >= 3
 
-    # the Context API calibrates the noise to the same sensitivity
     context = dp.Context.compositor(
         data=a,
         privacy_unit=dp.unit_of(changes=1),
@@ -1044,14 +1068,14 @@ def test_finding_filtered_dp_sum_undercharged():
         margins=[Margin(by=["k"], invariant="lengths", max_length=50, max_groups=3)],
     )
     query = context.query().group_by("k").agg(x.filter(x > 1).dp.sum((2, 3)))
-    assert query.summarize()["scale"].to_list() == [1.0]
+    assert query.summarize()["scale"].item() >= 3
 
 
-def test_finding_filter_then_fill_forgets_filter():
-    """FINDING: in a grouped aggregation, the fill's output context is the input's,
-    so a preceding filter's effect on lengths is forgotten. With known lengths, ``dp.mean``
-    then treats the length as public, but its accounting doesn't, and the loss is infinite.
-    (``test_finding_filter_then_fill_undercharges_sum`` shows the effect on sums.)"""
+@issue("filtered-mean")
+def test_polars_filter_then_fill_mean():
+    """D: with known lengths, ``dp.mean`` costs the same whether the fill comes before or
+    after an expression filter. Known issue: after filter-then-fill, the mean treats the
+    length as public, but the length's accounting sees the filter, so the loss is infinite."""
     domain = frame_domain(
         [Margin(by=[pl.col("k")], invariant="lengths", max_length=50)]
     )
@@ -1070,23 +1094,27 @@ def test_finding_filter_then_fill_forgets_filter():
             assert "not finite" in str(e)
             return math.inf
 
-    assert loss(pl.col("i").fill_null(0).filter(pred)) == 12.0
-    assert loss(pl.col("i").filter(pred).fill_null(0)) == math.inf
+    fill_then_filter = loss(pl.col("i").fill_null(0).filter(pred))
+    assert fill_then_filter == 12.0
+    assert loss(pl.col("i").filter(pred).fill_null(0)) == fill_then_filter
 
 
-def test_finding_bool_numeric_fill_accepted():
-    """FINDING: Polars can't fill a boolean with a number, but OpenDP accepts the plan.
-    It fails in Polars on every frame, so the failure doesn't depend on the data."""
-    for data in [
-        [],
-        [(None, None, None, 0, None, None)],
-        [(1, 1.0, "a", 0, True, 1.0)],
-    ]:
-        lf = to_lazyframe(data)
-        plan = lf.with_columns(pl.col("flag").fill_null(0))
-        t = dp.t.make_stable_lazyframe(frame_domain(), dp.symmetric_distance(), plan)
-        with pytest.raises(pl.exceptions.PolarsError):
-            t(lf).collect()
+@issue("bool-numeric-fill")
+def test_polars_fill_null_rejects_bool_numeric_fill():
+    """A: filling a boolean column with a number, which Polars can't run, is rejected.
+    Known issue: OpenDP accepts the plan, which then fails in Polars on every frame
+    (so the failure doesn't depend on the data)."""
+    plan = to_lazyframe([]).with_columns(pl.col("flag").fill_null(0))
+    assert _stable(frame_domain(), plan) is None
+
+
+@issue("member-frame-margin")
+def test_polars_member_with_frame_margin():
+    """A frame within a margin with no grouping columns is a member of the domain.
+    Known issue: ``LazyFrameDomain.member`` runs a group-by over the margin's columns,
+    which Polars rejects when there are none, and the error is reported as non-membership."""
+    domain = frame_domain([Margin(by=[], max_length=100)])
+    assert _member(domain, to_lazyframe([(1, 1.0, "a", 0, True, 1.0)]))
 
 
 def test_polars_fill_null_filled_grouping_column_merges_groups():

@@ -16,8 +16,10 @@ Properties (labels match the comments below):
 * D: clamping terminates
 * E: large datasets, wide rows, extreme values and huge sizes
 
-Tests named ``test_finding_*`` pin behavior that undermines the declared bound or the domain,
-with minimal examples. They assert the current behavior, so a fix in the library will flip them.
+Known issues in the library are listed in ``KNOWN_ISSUES``. Each has minimal tests of the correct
+behavior, marked with ``known_issue`` (strict xfail), and the properties skip the inputs it
+affects while it's listed. When an issue is fixed, its tests pass and fail the run:
+remove the issue from ``KNOWN_ISSUES``, with its markers.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from test._props_common import (  # noqa: E402
     edge_floats,
     exact_lp_norm_cmp,
     float_arrays,
+    known_issue,
     member_reason,
     rejection,
     symmetric_distance,
@@ -53,6 +56,28 @@ dp.enable_features("contrib")
 
 SYM = dp.symmetric_distance()
 DTYPES = {"f64": np.float64, "f32": np.float32, "i64": np.int64}
+
+#: Known issues in ``make_np_clamp`` (and ``array2_domain``), which undermine the declared bound
+#: or the domain. See the module docstring.
+KNOWN_ISSUES = {
+    "exact-norm": "the loop stops once the rounded norm is at most the bound, "
+    "so clamped rows can be just above it in exact arithmetic",
+    "nonzero-origin": "adding a nonzero origin back doesn't round-trip, "
+    "so rows land outside the bound",
+    "f32-domain": "f32 data is checked against a float64 origin, or turned into float64",
+    "integer-data": "integer data is clamped to float64, while the domain declares T=i64",
+    "underflow": "L2 squares underflow, so rows far outside a tiny bound aren't clamped",
+    "subnormal-hang": "with a subnormal norm, the clamping loop can run forever",
+    "overflow-saturated": "norms that overflow are saturated at MAX, "
+    "so rows far outside a bound near MAX aren't clamped",
+    "cardinalities": "the output domain keeps the input's cardinalities",
+    "length-one-origin": "a length-1 origin broadcasts, but the domain declares one column",
+    "unfit-norm-warns": "a norm that doesn't fit the data's type warns when clamping",
+    "l2-membership-overflow": "array2_domain's L2 check squares values, which overflows",
+    "empty-data": "clamping an empty dataset raises",
+    "infinite-norm": "an infinite norm is accepted",
+    "p-true": "p=True is accepted as p=1",
+}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -107,6 +132,8 @@ class Config:
 def accepts(cfg: Config) -> bool:
     """The reference for when construction succeeds."""
     if not cfg.norm > 0:  # also rejects NaN
+        return False
+    if math.isinf(cfg.norm) and "infinite-norm" not in KNOWN_ISSUES:
         return False
     if cfg.p not in {1, 2}:
         return False
@@ -187,9 +214,7 @@ def configs(draw) -> Config:
     return Config(
         T=T,
         cols=cols,
-        rows=draw(
-            st.integers(1, 40)
-        ),  # empty data raises: see test_finding_empty_data_raises
+        rows=draw(st.integers(1 if "empty-data" in KNOWN_ISSUES else 0, 40)),
         p=draw(st.sampled_from([1, 2] * 12 + [0, 3, 1.5, None])),
         norm=draw(norms()),
         origin=origin,
@@ -244,21 +269,30 @@ def eps(dtype) -> Fraction:
     return Fraction(float(np.finfo(dtype).eps))
 
 
-def clean(cfg: Config) -> bool:
-    """Configurations where the output is expected to be in the output domain.
-    The others are pinned as findings below."""
-    return (
-        cfg.T == "f64"
-        and cfg.origin_kind in {"none", "zero scalar", "zeros"}
-        and cfg.norm < math.inf
-        # L2 membership squares values, which overflows (see test_finding_l2_membership_overflows)
-        and not (cfg.p == 2 and cfg.norm > 1e154)
-    )
+def membership_issues(cfg: Config) -> set[str]:
+    """The known issues that can put this configuration's output outside the output domain."""
+    issues = set()
+    if cfg.T == "f32":
+        issues.add("f32-domain")
+    if cfg.T == "i64":
+        issues.add("integer-data")
+    if cfg.origin_kind in {"moderate", "1e3", "1e15", "f32 array"}:
+        issues.add("nonzero-origin")
+    if cfg.origin_kind == "length 1":
+        issues.add("length-one-origin")
+    if cfg.norm == math.inf:
+        issues.add("infinite-norm")
+    if cfg.p == 2 and cfg.norm > 1e154:
+        issues.add("l2-membership-overflow")
+    return issues & KNOWN_ISSUES.keys()
 
 
 def hang_allowed(cfg: Config, out_dtype) -> bool:
-    """Norms so small that clamping may not terminate (see ``test_finding_subnormal_norm_hangs``)."""
-    return cfg.norm < float(np.finfo(out_dtype).smallest_normal) * 2.0**30
+    """Whether clamping may hang: only with tiny norms, while that issue is known."""
+    return (
+        "subnormal-hang" in KNOWN_ISSUES
+        and cfg.norm < float(np.finfo(out_dtype).smallest_normal) * 2.0**30
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -298,7 +332,7 @@ def test_np_clamp_properties(cfg: Config, data):
     assert t.input_metric == SYM and t.output_metric == SYM
     assert (dout.norm, dout.p, dout.nan) == (float(cfg.norm), cfg.p, False)
     assert (dout.size, dout.T) == (din.size, din.T)
-    assert np.array_equal(dout.cardinalities, din.cardinalities)
+    # (the output's cardinalities aren't checked: see the "cardinalities" known issue)
     expected_cols = din.num_columns
     if isinstance(cfg.origin, np.ndarray) and cfg.origin.ndim == 1:
         expected_cols = cfg.origin.size
@@ -324,12 +358,13 @@ def test_np_clamp_properties(cfg: Config, data):
             assert hang_allowed(cfg, out_dtype), "clamping hung"
             event("hang (tiny norm)")
             return None
-        # only a norm that doesn't fit the data's type may warn
-        # (see test_finding_norm_outside_type_warns)
+        # only a norm that doesn't fit the data's type may warn, while that issue is known
         info = np.finfo(out_dtype)
         unfit = not float(info.smallest_subnormal) / 2 < cfg.norm <= float(info.max)
         for w in caught:
-            assert unfit, f"unexpected warning: {w.message}"
+            assert unfit and "unfit-norm-warns" in KNOWN_ISSUES, (
+                f"unexpected warning: {w.message}"
+            )
             event(f"warning: {w.message}")
         # B: same shape, and the input isn't mutated
         assert array_key(x) == before, "the input array was mutated"
@@ -389,26 +424,32 @@ def test_np_clamp_properties(cfg: Config, data):
     )
     assert array_key(clamp(x[perm])) == array_key(out[perm])
 
-    # C: the output is in the output domain (other configurations are pinned as findings)
-    if clean(cfg):
+    # C: the output is in the output domain, except where a known issue applies
+    if not membership_issues(cfg):
         reason = member_reason(t.output_domain, out)
         assert reason is None, reason
 
-    # C: the exact norm about the origin exceeds the bound by no more than rounding:
-    # relative error from the norm computation, plus the rounding of adding the origin back
+    # C: the exact norm about the origin is at most the bound. While the rounding issues are
+    # known, it may exceed the bound by rounding: relative error from the norm computation,
+    # plus the rounding of adding the origin back; and extreme norms are skipped
     small = cfg.norm < (1e-150 if out.dtype == np.float64 else 1e-15)
-    if not small and cfg.norm < float(np.finfo(out.dtype).max) / 2:
+    huge = cfg.norm >= float(np.finfo(out.dtype).max) / 2
+    if (small and "underflow" in KNOWN_ISSUES) or (
+        huge and "overflow-saturated" in KNOWN_ISSUES
+    ):
+        event("C skipped: extreme norm")
+    elif cfg.norm < math.inf:
         o = np.broadcast_to(np.asarray(origin, dtype=out.dtype), (cfg.cols,))
-        # adding the origin back moves each coordinate by at most one spacing of floats near it
-        shift = np.spacing(out.dtype.type(np.abs(o).max() + cfg.norm))
-        bound = Fraction(cfg.norm) * (1 + 4 * (cfg.cols + 2) * eps(out.dtype))
-        bound += Fraction(float(shift)) * cfg.cols
+        bound = Fraction(cfg.norm)
+        if {"exact-norm", "nonzero-origin"} & KNOWN_ISSUES.keys():
+            # adding the origin back moves each coordinate by at most one spacing of floats
+            shift = np.spacing(out.dtype.type(np.abs(o).max() + cfg.norm))
+            bound *= 1 + 4 * (cfg.cols + 2) * eps(out.dtype)
+            bound += Fraction(float(shift)) * cfg.cols
         for i in sample:
             assert exact_norm_cmp(out[i], o, bound, cfg.p) <= 0, (
-                f"row {i} is beyond rounding"
+                f"row {i} is beyond the bound"
             )
-    else:
-        event("C skipped: extreme norm")
 
     # C: neighbors (rows inserted, deleted and permuted) are no further apart after clamping
     k = data.draw(st.integers(0, 4))
@@ -497,7 +538,7 @@ def test_np_clamp_huge_sizes(size):
 
 
 # ---------------------------------------------------------------------------------------------
-# Findings
+# Known issues
 # ---------------------------------------------------------------------------------------------
 
 
@@ -507,155 +548,197 @@ def exact_violations(out, norm, p, origin=0.0) -> list[int]:
     return [i for i, row in enumerate(out) if exact_norm_cmp(row, o, norm, p) > 0]
 
 
+def issue(key: str, raises=AssertionError):
+    return known_issue(KNOWN_ISSUES, key, raises)
+
+
+@issue("exact-norm")
 @pytest.mark.parametrize("p", [1, 2])
-def test_finding_exact_norm_exceeds_bound(p):
-    # FINDING: the loop stops once the *rounded* norm is at most the bound,
-    # so many clamped rows have an exact norm just above it, while the domain accepts them.
+def test_np_clamp_rows_within_exact_bound(p):
+    # C: clamped rows are within the bound in exact arithmetic, as the domain declares.
+    # Known issue: the loop stops once the *rounded* norm is at most the bound,
+    # so many rows end up just above it (by rounding only)
     t = f64_clamp(1.0, p)
     out = t(np.random.default_rng(0).normal(size=(1_000, 5)) * 10)
     assert member_reason(t.output_domain, out) is None
-    violations = exact_violations(out, 1.0, p)
-    assert len(violations) > 100, (
-        f"expected many rows over the bound, got {len(violations)}"
-    )
-    # ... but only by rounding
-    assert not exact_violations(out, 1.0 + 1e-14, p)
+    assert not exact_violations(out, 1.0, p)
 
 
-def test_finding_nonzero_origin_breaks_domain():
-    # FINDING: adding a nonzero origin back after clamping doesn't round-trip,
-    # so rows land outside the output domain, by up to the spacing of floats near the origin.
+@issue("nonzero-origin")
+def test_np_clamp_nonzero_origin_in_domain():
+    # C: with a nonzero origin, rows are in the output domain, and within the bound.
+    # Known issue: adding the origin back after clamping doesn't round-trip, so rows land
+    # outside the bound, by up to the spacing of floats near the origin: more than 1% near 1e15
     rng = np.random.default_rng(1)
     origin = rng.normal(size=5) * 1e3
     t = f64_clamp(1.0, 2, origin)
     out = t(rng.normal(size=(1_000, 5)) * 1e3 + origin)
-    assert "row norm" in rejection(t.output_domain, out)
-    # far from zero, floats are sparse, so the overrun is large: here, more than 1%
+    assert member_reason(t.output_domain, out) is None
     origin = np.full(5, 1e15)
     t = f64_clamp(1.0, 2, origin)
     out = t(rng.normal(size=(1_000, 5)) * 10 + origin)
-    assert exact_violations(out, 1.01, 2, origin)
+    assert not exact_violations(out, 1.0, 2, origin)
 
 
-def test_finding_f32_fails_output_domain():
-    # FINDING: the output domain's origin is a float64 array,
-    # so membership measures f32 rows in float64, where a row clamped to norm 1 in f32 is over 1
+@issue("f32-domain")
+def test_np_clamp_f32_in_domain():
+    # C: clamped f32 data is in the output domain.
+    # Known issue: the output domain's origin is a float64 array, so membership measures
+    # f32 rows in float64, where a row clamped to norm 1 in f32 is over 1
     t = make_np_clamp(dp.numpy.array2_domain(T=dp.f32), SYM, 1.0, 2)
     out = t(np.array([[3.0, 4.0]], dtype=np.float32))
-    assert out.dtype == np.float32
-    assert "row norm" in rejection(t.output_domain, out)
-    # and a float64 origin array silently turns f32 data into f64, which isn't of type T
+    assert member_reason(t.output_domain, out) is None
+
+
+@issue("f32-domain")
+def test_np_clamp_f32_keeps_type():
+    # C: with a float64 origin array, f32 data stays f32, as the domain declares.
+    # Known issue: the float64 origin turns f32 data into f64, which isn't of type T
     t = make_np_clamp(dp.numpy.array2_domain(T=dp.f32), SYM, 1.0, 2, np.zeros(2))
     out = t(np.array([[3.0, 4.0]], dtype=np.float32))
-    assert out.dtype == np.float64
-    assert "type" in rejection(t.output_domain, out)
-
-
-def test_finding_integer_data_becomes_float():
-    # FINDING: integer data is accepted, but the output is float64 while the domain declares T=i64
-    t = make_np_clamp(dp.numpy.array2_domain(T=dp.i64), SYM, 1.0, 2)
-    out = t(np.array([[3, 4]], dtype=np.int64))
-    assert out.dtype == np.float64
-    assert "type" in rejection(t.output_domain, out)
-
-
-def test_finding_underflow_hides_large_rows():
-    # FINDING: L2 norms are computed as sqrt(sum(x**2)), and the squares underflow to zero,
-    # so a row far outside a tiny bound isn't clamped, and the output domain accepts it.
-    t = f64_clamp(1e-300, 2)
-    x = np.array([[1e-200, 1e-200]])
-    out = t(x)
-    assert array_key(out) == array_key(x)
     assert member_reason(t.output_domain, out) is None
-    assert exact_violations(out, 1e-201, 2) == [0]  # the exact norm is about 1.4e-200
 
 
-def test_finding_subnormal_norm_hangs():
-    # FINDING: with a subnormal norm, dividing by a factor near 1 can round back to the same value,
+@issue("integer-data")
+def test_np_clamp_integer_data_in_domain():
+    # C: integer data is rejected, or its output is in the output domain.
+    # Known issue: it's accepted, but the output is float64 while the domain declares T=i64
+    try:
+        t = make_np_clamp(dp.numpy.array2_domain(T=dp.i64), SYM, 1.0, 2)
+    except ValueError:
+        return
+    out = t(np.array([[3, 4]], dtype=np.int64))
+    assert member_reason(t.output_domain, out) is None
+
+
+@issue("underflow")
+def test_np_clamp_tiny_bound():
+    # C: a row far outside a tiny bound is clamped.
+    # Known issue: L2 norms are computed as sqrt(sum(x**2)), and the squares underflow to zero,
+    # so the row isn't clamped, and the output domain accepts it
+    t = f64_clamp(1e-300, 2)
+    out = t(np.array([[1e-200, 1e-200]]))
+    assert not exact_violations(out, 1e-300 * (1 + 1e-9), 2)
+
+
+@issue("subnormal-hang")
+def test_np_clamp_subnormal_norm_terminates():
+    # D: clamping terminates with a subnormal norm.
+    # Known issue: dividing by a factor near 1 can round back to the same value,
     # so the loop never ends
     t = f64_clamp(3 * 5e-324, 1)
-    with pytest.raises(TimeoutError), time_limit(5):
-        t(np.array([[1e-323, 1e-323]]))
+    try:
+        with time_limit(5):
+            t(np.array([[1e-323, 1e-323]]))
+    except TimeoutError:
+        raise AssertionError("clamping didn't finish in 5 seconds") from None
 
 
-def test_finding_overflowing_norm_is_saturated():
-    # FINDING: a norm that overflows is replaced with MAX, so with a bound near MAX
-    # a row whose exact norm is far above the bound is left unchanged
-    t = f64_clamp(np.finfo(np.float64).max, 1)
-    x = np.full((1, 4), np.finfo(np.float64).max)
-    out = t(x)
-    assert array_key(out) == array_key(x)
-    assert exact_violations(out, Fraction(float(np.finfo(np.float64).max)) * 2, 1) == [
-        0
-    ]  # 4·MAX
+@issue("overflow-saturated")
+def test_np_clamp_bound_near_max():
+    # C: with a bound near MAX, a row whose exact norm is far above it is clamped.
+    # Known issue: a norm that overflows is replaced with MAX, so the row is left unchanged
+    # (its exact L1 norm is 4·MAX)
+    max_ = np.finfo(np.float64).max
+    t = f64_clamp(max_, 1)
+    out = t(np.full((1, 4), max_))
+    assert not exact_violations(
+        out, Fraction(float(max_)) * (1 + Fraction(1, 2**40)), 1
+    )
 
 
-def test_finding_cardinalities_carried_over():
-    # FINDING: the output domain keeps the input's cardinalities, but scaling rows creates new values
+@issue("cardinalities")
+def test_np_clamp_cardinalities():
+    # C: with declared cardinalities, the output is in the output domain.
+    # Known issue: the output domain keeps the input's cardinalities,
+    # but scaling rows creates new values
     t = make_np_clamp(
         dp.numpy.array2_domain(T=float, cardinalities=[1, 2]), SYM, 1.0, 2
     )
     x = np.array([[1.0, 0.0], [1.0, 5.0]])
     assert member_reason(t.input_domain, x) is None
-    assert "cardinalities" in rejection(t.output_domain, t(x))
+    assert member_reason(t.output_domain, t(x)) is None
 
 
-def test_finding_length_one_origin_broadcasts():
-    # FINDING: an origin of length 1 broadcasts over wider data,
-    # but the output domain then declares a single column
-    t = f64_clamp(1.0, 2, np.array([1.0]))
+@issue("length-one-origin")
+def test_np_clamp_length_one_origin():
+    # C: an origin of length 1 over wider data is rejected, or the output is in the output domain.
+    # Known issue: it broadcasts, but the output domain then declares a single column
+    try:
+        t = f64_clamp(1.0, 2, np.array([1.0]))
+    except ValueError:
+        return
     out = t(np.array([[3.0, 4.0, 5.0]]))
-    assert out.shape == (1, 3)
-    assert t.output_domain.descriptor.num_columns == 1
-    assert "columns" in rejection(t.output_domain, out)
+    assert member_reason(t.output_domain, out) is None
 
 
-def test_finding_norm_outside_type_warns():
-    # FINDING: a norm that doesn't fit the data's type warns when clamping:
-    # one that rounds to zero divides by zero, and one above the type's MAX overflows a cast.
-    # The function suppresses some overflow and underflow warnings, but not these,
-    # so under this project's warnings-as-errors configuration the call fails.
-    # The results themselves are within the bound.
+@issue("unfit-norm-warns")
+@pytest.mark.parametrize(
+    "norm", [5e-324, 1e300], ids=["rounds to zero", "above f32 MAX"]
+)
+def test_np_clamp_unfit_norm_doesnt_warn(norm):
+    # A: a norm that doesn't fit the data's type is rejected, or clamps without warnings
+    # (which this project's configuration turns into errors).
+    # Known issue: one that rounds to zero divides by zero, and one above the type's MAX
+    # overflows a cast. The function suppresses some overflow and underflow warnings,
+    # but not these. The results themselves are within the bound.
     x = np.array([[1.0]], dtype=np.float32)
-    t = make_np_clamp(dp.numpy.array2_domain(T=dp.f32), SYM, 5e-324, 1)
-    with pytest.warns(RuntimeWarning, match="divide by zero"):
-        out = t(x)
-    assert array_key(out) == array_key(np.zeros((1, 1), dtype=np.float32))
-    t = make_np_clamp(dp.numpy.array2_domain(T=dp.f32), SYM, 1e300, 1)
-    with pytest.warns(RuntimeWarning, match="overflow encountered in cast"):
-        out = t(x)
-    assert array_key(out) == array_key(x)
+    try:
+        t = make_np_clamp(dp.numpy.array2_domain(T=dp.f32), SYM, norm, 1)
+    except ValueError:
+        return
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        t(x)
+    assert not caught, [str(w.message) for w in caught]
 
 
-def test_finding_l2_membership_overflows():
-    # FINDING: array2_domain checks L2 norms as sqrt(sum(x**2)), and the squares overflow,
-    # so with a declared norm above about 1.3e154, rows well within it are rejected
+@issue("l2-membership-overflow")
+def test_np_clamp_l2_membership_huge_norm():
+    # C: array2_domain accepts rows well within a huge declared L2 norm.
+    # Known issue: it checks L2 norms as sqrt(sum(x**2)), and the squares overflow,
+    # so with a declared norm above about 1.3e154, such rows are rejected
     # (and, under warnings-as-errors, the check raises)
     domain = dp.numpy.array2_domain(T=float, norm=1e300, p=2)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         assert member_reason(domain, np.array([[1e150, 0.0]])) is None
-        assert "row norm" in rejection(domain, np.array([[1e200, 0.0]]))
+        assert member_reason(domain, np.array([[1e200, 0.0]])) is None
 
 
-def test_finding_empty_data_raises():
-    # FINDING: clamping an empty dataset raises, since the loop takes the max of no row norms.
-    # An empty dataset is a member of the input domain, and its neighbors are single rows.
+@issue("empty-data")
+def test_np_clamp_empty_data():
+    # B: clamping an empty dataset returns it. It's a member of the input domain,
+    # and its neighbors are single rows.
+    # Known issue: it raises, since the loop takes the max of no row norms
     t = f64_clamp(1.0, 2)
     x = np.empty((0, 3))
     assert member_reason(t.input_domain, x) is None
-    with pytest.raises(Exception, match="zero-size array"):
-        t(x)
+    try:
+        out = t(x)
+    except Exception as e:
+        raise AssertionError(f"clamping empty data raised {e!r}") from e
+    assert out.shape == (0, 3)
 
 
-def test_finding_unusual_parameters():
-    # FINDING: an infinite norm is accepted (so nothing is clamped and the declared bound is infinite),
-    # p=True is accepted as p=1,
-    # and a nonzero scalar or a list origin is only rejected by array2_domain
-    t = f64_clamp(math.inf, 2)
-    assert t.output_domain.descriptor.norm == math.inf
-    t = f64_clamp(1.0, True)
-    assert t.output_domain.descriptor.p is True
+@issue("infinite-norm", raises=pytest.fail.Exception)
+def test_np_clamp_rejects_infinite_norm():
+    # A: an infinite norm is rejected.
+    # Known issue: it's accepted, so nothing is clamped and the declared bound is infinite
+    with pytest.raises(ValueError):
+        f64_clamp(math.inf, 2)
+
+
+@issue("p-true", raises=pytest.fail.Exception)
+def test_np_clamp_rejects_p_true():
+    # A: p=True is rejected, like any p other than 1 or 2.
+    # Known issue: it's accepted as p=1
+    with pytest.raises(ValueError):
+        f64_clamp(1.0, True)
+
+
+def test_np_clamp_rejects_unusual_origins():
+    # A: a nonzero scalar or a list origin is rejected (by array2_domain)
     with pytest.raises(ValueError, match="scalar origin must be zero"):
         f64_clamp(1.0, 2, 5.0)
     with pytest.raises(ValueError, match="origin must be a scalar, ndarray or None"):

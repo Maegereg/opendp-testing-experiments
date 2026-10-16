@@ -12,6 +12,12 @@
 //! References are always computed in `IBig`/`RBig`, never in the atomic type,
 //! so that overflow or rounding in the atomic type can't hide a failure.
 //!
+//! Known issues in the library are recorded in each suite's module docs. A test of the correct
+//! behavior that fails because of one is marked `#[should_panic(expected = "known issue…")]`,
+//! with the marker in its assertion message, so it passes only while it fails for that reason.
+//! Properties skip the affected cases behind a `KNOWN_…` flag. When an issue is fixed, its
+//! tests fail: remove their `should_panic`, and clear the flag.
+//!
 //! Statistical tests (labelled D in the suites) run on fixed parameter grids, not on proptest
 //! cases, and use the library's `check_chi_square` at significance 1e-6, as its sampler tests do.
 //! The noise can't be seeded, so each such check fails spuriously with probability 1e-6.

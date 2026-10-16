@@ -8,6 +8,11 @@
 //! * B: the function agrees with an exact reference (or a proven error bound for floats)
 //! * C: the stability map is sound: `|f(x) - f(x')| <= map(d)` whenever `d(x, x') <= d`,
 //!   and never under-reports the ideal sensitivity
+//!
+//! Known issue: a sized float sum over 0 records is rejected ([`KNOWN_FLOAT_SIZE_ZERO`]).
+//! The test of the correct behavior is marked `#[should_panic(expected = "known issue")]`,
+//! and properties skip size 0 while the flag is set. When it's fixed, that test fails:
+//! remove its `should_panic`, and clear the flag.
 
 use std::ops::Bound;
 
@@ -104,6 +109,10 @@ fn check_int<T: SumInt>(case: Case<T>) -> TestResult {
     check_int_metric(&case, SymmetricDistance, false)?;
     check_int_metric(&case, InsertDeleteDistance, true)
 }
+
+/// Known issue: a sized float sum over 0 records is rejected with an overflow error,
+/// because the pairwise overflow check divides by the size (`max_ulp.neg_inf_div(&size_)`).
+const KNOWN_FLOAT_SIZE_ZERO: bool = true;
 
 fn check_int_metric<T, MI>(case: &Case<T>, metric: MI, ordered: bool) -> TestResult
 where
@@ -280,13 +289,13 @@ where
 
     // A: never panics, and accepts modest finite bounds: with |bounds| <= 2^20 and at most
     // DEFAULT_SIZE_LIMIT records, neither the sum nor its rounding allowance can overflow,
-    // so a rejection would be spurious. Size 0 is excluded: it's rejected
-    // (`test_finding_float_sum_rejects_size_zero`)
+    // so a rejection would be spurious (size 0 is skipped while its known issue stands)
     let limit = RBig::from(1u32 << 20);
     let modest = matches!(
         (rat(l), rat(u)),
         (Some(lr), Some(ur)) if -limit.clone() <= lr && ur <= limit
-    ) && size.is_none_or(|n| 0 < n && n <= DEFAULT_SIZE_LIMIT);
+    ) && size
+        .is_none_or(|n| (n > 0 || !KNOWN_FLOAT_SIZE_ZERO) && n <= DEFAULT_SIZE_LIMIT);
     let t = match make_sum(domain.clone(), metric.clone()) {
         Ok(t) => t,
         Err(e) => {
@@ -503,30 +512,27 @@ fn test_sum_int_branches() -> Fallible<()> {
     Ok(())
 }
 
-// FINDING: a sized float sum over 0 records is rejected with an overflow error, because the
-// pairwise overflow check divides by the size (`max_ulp.neg_inf_div(&size_)`).
-// Integer sums accept size 0.
+// A: a sized float sum over 0 records is accepted, and sums to 0, as integer sums do.
+// Fails for the known issue: it's rejected with an overflow error
 #[test]
-fn test_finding_float_sum_rejects_size_zero() -> Fallible<()> {
-    for metric_ordered in [false, true] {
-        let err = if metric_ordered {
-            sum((0f64, 1.), Some(0), InsertDeleteDistance).map(|_| ())
-        } else {
-            sum((0f64, 1.), Some(0), SymmetricDistance).map(|_| ())
-        }
-        .unwrap_err();
-        assert!(
-            format!("{err:?}").contains("neg_inf_div(0)"),
-            "unexpected error: {err:?}"
-        );
-    }
-    assert!(sum((0f32, 1.), Some(0), SymmetricDistance).is_err());
-    assert!(sum((0f64, 1.), Some(1), SymmetricDistance).is_ok());
+#[should_panic(expected = "known issue")]
+fn test_float_sum_accepts_size_zero() {
     assert_eq!(
-        sum((0i32, 1), Some(0), SymmetricDistance)?.invoke(&vec![])?,
+        sum((0i32, 1), Some(0), SymmetricDistance)
+            .unwrap()
+            .invoke(&vec![])
+            .unwrap(),
         0
     );
-    Ok(())
+    for result in [
+        sum((0f64, 1.), Some(0), SymmetricDistance).and_then(|t| t.invoke(&vec![])),
+        sum((0f64, 1.), Some(0), InsertDeleteDistance).and_then(|t| t.invoke(&vec![])),
+    ] {
+        match result {
+            Ok(total) => assert_eq!(total, 0.0),
+            Err(e) => panic!("known issue: size 0 is rejected: {e:?}"),
+        }
+    }
 }
 
 #[test]

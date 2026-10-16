@@ -6,6 +6,13 @@
 //! * A: constructor succeeds exactly when its inputs are valid, and builds the expected output space
 //! * B: the function clamps each record independently, and never fails on in-domain data
 //! * C: under every event-level metric, the function is 1-stable and the map is the identity
+//! * D: pair atoms are clamped under the product order
+//!
+//! Known issue: pair bounds are validated under the lexicographic order, but pairs are clamped
+//! under the product order ([`KNOWN_PAIR_ORDER`]). Its test of the correct behavior is marked
+//! `#[should_panic(expected = "known issue: pair order")]`, and the pairs property skips failed
+//! clamps while the flag is set. When it's fixed, that test fails: remove its `should_panic`,
+//! and clear the flag.
 
 use std::fmt::Debug;
 
@@ -399,16 +406,32 @@ fn small_pair() -> impl Strategy<Value = (f64, f64)> {
     (-3i8..3, -3i8..3).prop_map(|(a, b)| (a as f64, b as f64))
 }
 
+/// Known issue: pair bounds are validated under the lexicographic order, but pairs are clamped
+/// and checked for membership under the product order. See `test_clamp_pairs_product_order`.
+const KNOWN_PAIR_ORDER: bool = true;
+
 proptest! {
-    /// D: whenever clamping pairs succeeds, each output lies within the bounds under the product order,
+    /// D: pair bounds that aren't ordered under the product order are rejected; otherwise
+    /// clamping succeeds, each output lies within the bounds under the product order,
     /// is in the output domain, and data already within the bounds is unchanged.
-    /// See `test_clamp_pairs_fail_on_incomparable_values` for when it fails.
+    /// While the known issue stands, cases where clamping fails are skipped.
     #[test]
     fn prop_pairs(b in bounds(small_pair), data in prop::collection::vec(small_pair(), 0..10)) {
         let domain = VectorDomain::new(AtomDomain::<(f64, f64)>::new_non_nan());
-        let t = ok(make_clamp(domain, SymmetricDistance, b))?;
-        let Ok(out) = t.invoke(&data) else { return Ok(()) };
         let ((l0, l1), (u0, u1)) = b;
+        let product_ordered = l0 <= u0 && l1 <= u1;
+        let t = match make_clamp(domain, SymmetricDistance, b) {
+            Ok(t) => t,
+            Err(e) => {
+                prop_assert!(!product_ordered, "rejected {:?}: {:?}", b, e);
+                return Ok(());
+            }
+        };
+        let out = match t.invoke(&data) {
+            Ok(out) => out,
+            Err(_) if KNOWN_PAIR_ORDER => return Ok(()),
+            Err(e) => return Err(TestCaseError::fail(format!("clamping {data:?} failed: {e:?}"))),
+        };
         for ((x, out), (o0, o1)) in data.iter().zip(&out).zip(&out) {
             prop_assert!(l0 <= *o0 && *o0 <= u0 && l1 <= *o1 && *o1 <= u1, "{:?} -> {:?}", x, out);
             if l0 <= x.0 && x.0 <= u0 && l1 <= x.1 && x.1 <= u1 {
@@ -419,28 +442,39 @@ proptest! {
     }
 }
 
-/// FINDING: the bounds are validated under the lexicographic order (`PartialOrd`),
-/// while pairs are clamped, and checked for domain membership, under the product order (`ProductOrd`),
-/// which is only partial. So `invoke` can fail on in-domain data, which is observable,
-/// and membership errors instead of returning false.
-/// This pins the current behavior; pairs are not exposed through FFI.
+/// D: pair bounds that aren't ordered under the product order are rejected, and clamping
+/// in-domain data never fails, with membership returning a bool.
+/// Fails for the known issue: the bounds are validated under the lexicographic order
+/// (`PartialOrd`), while pairs are clamped, and checked for domain membership, under the
+/// product order (`ProductOrd`), which is only partial. So `invoke` can fail on in-domain data,
+/// which is observable, and membership errors instead of returning false.
+/// Pairs are not exposed through FFI.
 #[test]
-fn test_clamp_pairs_fail_on_incomparable_values() -> Fallible<()> {
+#[should_panic(expected = "known issue: pair order")]
+fn test_clamp_pairs_product_order() {
     let domain = VectorDomain::new(AtomDomain::<(f64, f64)>::new_non_nan());
 
-    // bounds are ordered lexicographically but not under the product order,
-    // so the constructor succeeds, but clamping any record fails
-    let t = make_clamp(domain.clone(), SymmetricDistance, ((-1., 1.), (0., 0.)))?;
-    assert!(t.invoke(&vec![(0., 0.)]).is_err());
-    assert_eq!(t.invoke(&vec![])?, vec![]);
+    // bounds ordered lexicographically but not under the product order:
+    // rejected, or clamping still succeeds
+    if let Ok(t) = make_clamp(domain.clone(), SymmetricDistance, ((-1., 1.), (0., 0.))) {
+        assert!(
+            t.invoke(&vec![(0., 0.)]).is_ok(),
+            "known issue: pair order: clamping fails under unordered bounds"
+        );
+    }
 
-    // bounds are ordered under both, but a record is incomparable with a bound
-    let t = make_clamp(domain, SymmetricDistance, ((0., 0.), (1., 1.)))?;
+    // bounds ordered under both: a record incomparable with a bound is clamped componentwise
+    let t = make_clamp(domain, SymmetricDistance, ((0., 0.), (1., 1.))).unwrap();
     assert_eq!(
-        t.invoke(&vec![(0.5, 0.5), (2., 2.)])?,
+        t.invoke(&vec![(0.5, 0.5), (2., 2.)]).unwrap(),
         vec![(0.5, 0.5), (1., 1.)]
     );
-    assert!(t.invoke(&vec![(2., -1.)]).is_err());
-    assert!(t.output_domain.element_domain.member(&(2., -1.)).is_err());
-    Ok(())
+    match t.invoke(&vec![(2., -1.)]) {
+        Ok(out) => assert_eq!(out, vec![(1., 0.)]),
+        Err(e) => panic!("known issue: pair order: clamping (2, -1) fails: {e:?}"),
+    }
+    assert!(
+        t.output_domain.element_domain.member(&(2., -1.)).is_ok(),
+        "known issue: pair order: membership errors"
+    );
 }

@@ -26,9 +26,10 @@ from hypothesis import strategies as st  # noqa: E402
 
 import opendp.prelude as dp  # noqa: E402
 
-# registers and loads the hypothesis profiles, and provides exact row comparison
+# exact row comparison, and the known-issue marker
 from test._props_common import (  # noqa: E402, F401
     Row,
+    known_issue,
     row_key,
     row_multiset,
     symmetric_distance,

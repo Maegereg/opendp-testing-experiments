@@ -16,6 +16,11 @@
 //! * C: the map is `d -> 2d`, and is sound and tight in the deterministic branches
 //! * D: the shuffles are uniform, and don't depend on the order of unordered input (statistical)
 //! * E: large datasets and sizes, including sizes too large to allocate
+//!
+//! Known issue: imputing to a size that can't be allocated panics or aborts the process,
+//! instead of returning an error. Its tests of the correct behavior are marked
+//! `#[should_panic(expected = "known issue: unallocatable size")]`.
+//! When it's fixed, they fail: remove their `should_panic`.
 
 use std::fmt::Debug;
 
@@ -509,22 +514,22 @@ fn test_resize_large_deterministic() -> Fallible<()> {
     Ok(())
 }
 
-// E: FINDING: imputing to a size whose buffer can't be described panics with a capacity overflow,
-// instead of returning an error. Construction accepts any positive size.
+// E: imputing to a size whose buffer can't be described returns an error.
+// Fails for the known issue: it panics with a capacity overflow. Construction accepts any positive size.
 #[test]
-fn test_resize_unallocatable_size_panics() -> Fallible<()> {
-    let t = resize_i32(usize::MAX)?;
+#[should_panic(expected = "known issue: unallocatable size")]
+fn test_resize_unallocatable_size_errors() {
+    let t = resize_i32(usize::MAX).unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.invoke(&vec![1])));
-    assert!(
-        result.is_err(),
-        "expected a capacity-overflow panic, got {result:?}"
-    );
-    Ok(())
+    match result {
+        Ok(result) => assert!(result.is_err(), "resized to usize::MAX records"),
+        Err(_) => panic!("known issue: unallocatable size: imputing to usize::MAX panics"),
+    }
 }
 
 /// Imputes to 2^45 records: 2^48 bytes of references, which passes the capacity check
 /// but exceeds a 48-bit address space, so the allocation fails.
-/// Ignored, because a failed allocation aborts the process. Run by [`test_resize_unallocatable_size_aborts`].
+/// Ignored, because a failed allocation aborts the process. Run by [`test_resize_unallocatable_size_doesnt_abort`].
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[ignore]
@@ -532,27 +537,25 @@ fn probe_resize_allocation_failure() {
     if !in_probe_child() {
         return;
     }
+    // returns, with an error, once the known issue is fixed
     let _ = resize_i32(1 << 45).unwrap().invoke(&vec![1]);
 }
 
-// E: FINDING: imputing to a size that passes the capacity check but can't be allocated
-// aborts the whole process, instead of returning an error.
+// E: imputing to a size that passes the capacity check but can't be allocated returns an error.
+// Fails for the known issue: the failed allocation aborts the whole process.
 // The probe runs in a child process, since the abort can't be caught. It assumes a 64-bit
 // target with at most 48 bits of address space, where the allocation fails immediately.
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn test_resize_unallocatable_size_aborts() {
+#[should_panic(expected = "known issue: unallocatable size")]
+fn test_resize_unallocatable_size_doesnt_abort() {
     let (status, stderr) = run_ignored_test(
         "transformations::resize::test_props::probe_resize_allocation_failure",
         std::time::Duration::from_secs(60),
     )
     .expect("the allocation probe didn't finish within 60 seconds");
-    assert!(
-        !status.success(),
-        "expected the probe to abort, got {status:?}"
-    );
-    assert!(
-        stderr.contains("memory allocation"),
-        "unexpected failure: {stderr}"
-    );
+    if !status.success() && stderr.contains("memory allocation") {
+        panic!("known issue: unallocatable size: the probe aborted: {status:?}");
+    }
+    assert!(status.success(), "the probe failed: {stderr}");
 }

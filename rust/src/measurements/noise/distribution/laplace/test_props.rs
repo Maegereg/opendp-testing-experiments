@@ -11,6 +11,12 @@
 //!   and bounds the true privacy loss between any two inputs at distance `d`
 //! * C: the function preserves shape, is exact without noise, and its noise is in range
 //! * D: the noise has the discrete Laplace distribution, independent of the input (statistical)
+//!
+//! Known issue: the privacy map accepts negative distances within the granularity's rounding
+//! allowance ([`KNOWN_NEGATIVE_DISTANCE`]). Its test of the correct behavior is marked
+//! `#[should_panic(expected = "known issue: negative distance")]`, and the map property skips
+//! those distances while the flag is set. When it's fixed, that test fails: remove its
+//! `should_panic`, and clear the flag.
 
 use dashu::integer::IBig;
 use dashu::rational::RBig;
@@ -166,6 +172,10 @@ where
     Ok(Some(mechanism))
 }
 
+/// Known issue: negative distances within the rounding allowance are accepted by the privacy map.
+/// See `test_laplace_rejects_negative_distance`.
+const KNOWN_NEGATIVE_DISTANCE: bool = true;
+
 fn check<T: NoiseAtom, Q: PropDistance>(case: Case<T, Q>) -> TestResult
 where
     DiscreteLaplace: MakeNoise<AtomDomain<T>, AbsoluteDistance<Q>, MaxDivergence>
@@ -186,13 +196,21 @@ where
     };
     let rounding = (pow2(k) - pow2(T::k_min())) * RBig::from(n);
 
-    // B: the map is exactly (d + rounding) / scale, rounded up, and rejects invalid distances.
-    // FINDING: negativity is checked after adding the rounding allowance,
-    // so a negative `d` with `|d| <= rounding` is accepted (see test_laplace_negative_distance).
+    // B: the map is exactly (d + rounding) / scale, rounded up, and rejects invalid distances:
+    // negative or non-finite. While the known issue stands, negative distances within the
+    // rounding allowance are skipped
     let check_map = |d: &Q| -> TestResult {
         let out = (m.map)(d);
-        let total = d.exact().map(|d| d + &rounding);
-        let Some(total) = total.filter(|t| *t >= RBig::ZERO) else {
+        let total = match d.exact() {
+            Some(d) if d < RBig::ZERO => {
+                if KNOWN_NEGATIVE_DISTANCE && d + &rounding >= RBig::ZERO {
+                    return Ok(());
+                }
+                None
+            }
+            d => d.map(|d| d + &rounding),
+        };
+        let Some(total) = total else {
             prop_assert!(out.is_err(), "map({:?}) = {:?} should fail", d, out);
             return Ok(());
         };
@@ -524,12 +542,14 @@ fn test_laplace_rounding_ties() -> Fallible<()> {
     Ok(())
 }
 
-/// FINDING: the privacy map rejects negative distances only after adding the rounding allowance
+/// B: the privacy map rejects every negative distance, whatever the granularity.
+/// Fails for the known issue: negativity is checked only after adding the rounding allowance
 /// for the granularity, so negative distances smaller than the allowance are accepted
 /// whenever `k > k_min`. No pair of inputs is at a negative distance, so privacy is unaffected,
 /// but the map is inconsistent with the default granularity, which rejects every negative distance.
 #[test]
-fn test_laplace_negative_distance() -> Fallible<()> {
+#[should_panic(expected = "known issue: negative distance")]
+fn test_laplace_rejects_negative_distance() {
     let space = || {
         (
             AtomDomain::<f64>::new_non_nan(),
@@ -538,12 +558,15 @@ fn test_laplace_negative_distance() -> Fallible<()> {
     };
 
     let (d, m) = space();
-    assert!(make_laplace(d, m, 1., None)?.map(&-0.5).is_err());
+    assert!(make_laplace(d, m, 1., None).unwrap().map(&-0.5).is_err());
 
     // with k = 0 the allowance is 1 - 2^-1074
     let (d, m) = space();
-    let meas = make_laplace(d, m, 1., Some(0))?;
-    assert_eq!(meas.map(&-0.5)?, 0.5);
+    let meas = make_laplace(d, m, 1., Some(0)).unwrap();
     assert!(meas.map(&-1.0).is_err());
-    Ok(())
+    let out = meas.map(&-0.5);
+    assert!(
+        out.is_err(),
+        "known issue: negative distance: map(-0.5) = {out:?}"
+    );
 }

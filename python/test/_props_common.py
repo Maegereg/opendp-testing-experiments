@@ -8,6 +8,7 @@ and ``extras/test_np_clamp_props.py``) build their strategies and checks out of 
 * exact L1 and L2 norms, computed in rationals so that rounding, underflow and overflow can't hide a failure
 * ``member_reason``, which reports why a value isn't in a domain
 * ``time_limit``, to detect calls that hang
+* ``known_issue``, to mark tests of the correct behavior that fail because of a known issue
 
 Importable as ``test._props_common``: the rootdir ``conftest.py`` puts ``python/`` on ``sys.path``.
 That ``conftest.py`` also registers the hypothesis profiles: "opendp" by default,
@@ -208,3 +209,24 @@ def time_limit(seconds: float) -> Iterator[None]:
         signal.signal(signal.SIGALRM, previous)
         if numpy is not None and saved_errors is not None:
             numpy.seterr(**saved_errors)
+
+
+# ---------------------------------------------------------------------------------------------
+# Known issues
+# ---------------------------------------------------------------------------------------------
+
+
+def known_issue(known_issues: dict[str, str], key: str, raises=AssertionError):
+    """Marks a test of the correct behavior that fails because of the known issue ``key``.
+
+    Each suite lists its known issues in ``KNOWN_ISSUES`` (key to description), and properties
+    skip the affected cases while an issue is listed. The test is expected to fail, and only
+    with ``raises``, so that a different failure isn't hidden. It's strict: once the issue is
+    fixed, the test passes, and that fails the run, until the issue is removed from
+    ``KNOWN_ISSUES`` along with this marker.
+    """
+    import pytest
+
+    return pytest.mark.xfail(
+        strict=True, raises=raises, reason=f"known issue: {known_issues[key]}"
+    )

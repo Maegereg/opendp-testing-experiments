@@ -10,7 +10,7 @@
 //!
 //! `rand 0.7.3`'s `Uniform::new`, which runs once per imputed row, loops about
 //! `max(|lower|, |upper|) / (2 (upper - lower))` times. Generated bounds keep that cost low,
-//! and narrower bounds are probed separately (see `test_impute_adjacent_bounds_hang`).
+//! and narrower bounds are probed separately (see `test_impute_adjacent_bounds_finish`).
 //!
 //! Properties (labels match the comments below):
 //! * A: the constructor succeeds exactly when the bounds are valid, and builds the expected output space
@@ -18,6 +18,17 @@
 //! * C: the map is the identity, and is sound and tight
 //! * D: imputed values are uniform and independent (statistical)
 //! * E: large datasets, extreme and infinite bounds, and huge sizes
+//!
+//! Known issues: tests of the correct behavior that fail because of an issue are marked
+//! `#[should_panic(expected = "known issue: …")]`, and generators avoid the affected inputs
+//! while the issue's flag is set. When an issue is fixed, its tests fail: remove their
+//! `should_panic`, and clear the flag.
+//! * biased draws: when `upper - lower` overflows, draws only cover `[lower, lower + MAX)`
+//! * infinite bounds: accepted by the constructor, but imputing then panics
+//!   ([`KNOWN_INFINITE_BOUNDS`])
+//! * slow narrow bounds: each imputed row takes time proportional to
+//!   `max(|lower|, |upper|) / (upper - lower)`, and adjacent bounds never finish
+//!   ([`KNOWN_SLOW_NARROW_BOUNDS`])
 
 use std::fmt::Debug;
 
@@ -104,6 +115,12 @@ fn sampler_cost<T: ImputeAtom>((lower, upper): (T, T)) -> f64 {
     l.abs().max(u.abs()) / (u - l)
 }
 
+/// Known issue: infinite bounds are accepted, but imputing then panics. See the module docs.
+const KNOWN_INFINITE_BOUNDS: bool = true;
+/// Known issue: narrow bounds are slow to impute, and adjacent bounds never finish.
+/// See the module docs.
+const KNOWN_SLOW_NARROW_BOUNDS: bool = true;
+
 /// The sampler cost above which datasets are kept short.
 const SLOW: f64 = 1024.0;
 /// The largest sampler cost generated.
@@ -154,12 +171,17 @@ fn impute_bounds<T: ImputeAtom>() -> impl Strategy<Value = (T, T)> {
         2 => invalid,
     ]
     .prop_map(move |(l, u)| {
-        // keep the bounds finite, since infinite bounds panic (see `test_impute_infinite_bounds_panic`)
-        let (l, u) = (
-            if l.is_infinite() { max.copysign(l) } else { l },
-            if u.is_infinite() { max.copysign(u) } else { u },
-        );
-        if sampler_cost((l, u)) <= MAX_COST {
+        // while infinite bounds panic, keep the bounds finite
+        let (l, u) = if KNOWN_INFINITE_BOUNDS {
+            (
+                if l.is_infinite() { max.copysign(l) } else { l },
+                if u.is_infinite() { max.copysign(u) } else { u },
+            )
+        } else {
+            (l, u)
+        };
+        // while narrow bounds are slow, keep the cost of sampling bounded
+        if !KNOWN_SLOW_NARROW_BOUNDS || sampler_cost((l, u)) <= MAX_COST {
             return (l, u);
         }
         // too slow to sample: widen to a relative width of 2^-12
@@ -509,7 +531,7 @@ fn test_impute_is_independent() -> Fallible<()> {
 // D: over a range of a few f32 values, imputation is a continuous uniform draw rounded to
 // the nearest float, so `lower` has half the probability of each other value.
 // This only costs accuracy, and it's pinned to describe the behavior.
-// (f64 ranges this narrow hang: see `test_impute_adjacent_bounds_hang`.)
+// (f64 ranges this narrow hang: see `test_impute_adjacent_bounds_finish`.)
 #[test]
 fn test_impute_few_values_round_to_nearest() -> Fallible<()> {
     for k in [2usize, 4] {
@@ -544,21 +566,29 @@ fn overflowing_range<T: ImputeAtom>() -> Fallible<()> {
     let zero = <T as num::Zero>::zero();
     let non_negative = out.iter().filter(|&&v| v >= zero).count();
     assert!(out.iter().all(|&v| -max <= v && v < max));
-    assert_eq!(
-        non_negative, 0,
-        "expected every draw to be negative (the finding), got {non_negative} non-negative draws"
+    // about half the draws are non-negative: 1000 ± 200 is more than 8 standard deviations
+    assert!(
+        (800..=1200).contains(&non_negative),
+        "known issue: biased draws: {non_negative} of 2000 draws are non-negative"
     );
     Ok(())
 }
 
-// D: FINDING: when `upper - lower` overflows, rand shrinks the width from infinity to MAX,
-// so draws only cover [lower, lower + MAX). Over (-MAX, MAX) every imputed value is negative,
-// where a uniform draw would be non-negative half of the time.
-// Draws stay in bounds and are row-local, so this isn't a privacy failure.
+// D: draws over (-MAX, MAX), whose width overflows, are uniform: half are non-negative.
+// Fails for the known issue: rand shrinks the width from infinity to MAX, so draws only cover
+// [lower, lower + MAX), and every draw is negative. Draws stay in bounds and are row-local,
+// so this isn't a privacy failure.
 #[test]
-fn test_impute_overflowing_range_is_biased() -> Fallible<()> {
-    overflowing_range::<f32>()?;
-    overflowing_range::<f64>()
+#[should_panic(expected = "known issue: biased draws")]
+fn test_impute_overflowing_range_is_uniform_f32() {
+    overflowing_range::<f32>().unwrap()
+}
+
+// D: as above, for f64
+#[test]
+#[should_panic(expected = "known issue: biased draws")]
+fn test_impute_overflowing_range_is_uniform_f64() {
+    overflowing_range::<f64>().unwrap()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -618,33 +648,45 @@ fn test_impute_extreme_bounds() -> Fallible<()> {
     ])
 }
 
-fn infinite_bounds<T: ImputeAtom>() -> Fallible<()> {
+/// Infinite bounds are either rejected by the constructor,
+/// or impute every NaN without panicking (to a value within the bounds).
+fn infinite_bounds<T: ImputeAtom>() {
     let (zero, inf, nan) = (
         <T as num::Zero>::zero(),
         <T as num::Float>::infinity(),
         <T as num::Float>::nan(),
     );
     for bounds in [(-inf, zero), (zero, inf), (-inf, inf)] {
-        let t = make_impute_uniform_float(VectorDomain::default(), SymmetricDistance, bounds)?;
+        let Ok(t) = make_impute_uniform_float(VectorDomain::default(), SymmetricDistance, bounds)
+        else {
+            continue;
+        };
         // data without NaN passes through
         let x = vec![zero, inf, -inf];
-        assert_eq!(keys(&t.invoke(&x)?), keys(&x));
-        // the first NaN panics, instead of an error at construction
+        assert_eq!(keys(&t.invoke(&x).unwrap()), keys(&x));
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.invoke(&vec![nan])));
-        assert!(
-            result.is_err(),
-            "expected imputing with {bounds:?} to panic, got {result:?}"
-        );
+        match result {
+            Ok(Ok(out)) => assert!(out.iter().all(|&v| bounds.0 <= v && v <= bounds.1)),
+            Ok(Err(_)) => {}
+            Err(_) => panic!("known issue: infinite bounds: imputing with {bounds:?} panics"),
+        }
     }
-    Ok(())
 }
 
-// E: FINDING: infinite bounds are accepted by the constructor,
-// but imputing any NaN then panics in `Uniform::new` ("non-finite boundaries").
+// E: infinite bounds are rejected, or impute without panicking.
+// Fails for the known issue: they're accepted, and imputing then panics in `Uniform::new`
+// ("non-finite boundaries")
 #[test]
-fn test_impute_infinite_bounds_panic() -> Fallible<()> {
-    infinite_bounds::<f32>()?;
+#[should_panic(expected = "known issue: infinite bounds")]
+fn test_impute_infinite_bounds_f32() {
+    infinite_bounds::<f32>()
+}
+
+// E: as above, for f64
+#[test]
+#[should_panic(expected = "known issue: infinite bounds")]
+fn test_impute_infinite_bounds_f64() {
     infinite_bounds::<f64>()
 }
 
@@ -664,32 +706,35 @@ fn test_impute_huge_sizes() -> Fallible<()> {
 }
 
 /// Imputes one NaN between adjacent f64 values. `Uniform::new` then loops about 2^51 times.
-/// Ignored, because it doesn't finish. Run by [`test_impute_adjacent_bounds_hang`].
+/// Ignored, because it doesn't finish. Run by [`test_impute_adjacent_bounds_finish`].
 #[test]
 #[ignore]
 fn probe_impute_adjacent_bounds() {
     if !in_probe_child() {
         return;
     }
-    let _ = impute_f64((1.0, 1.0f64.next_up()))
-        .unwrap()
-        .invoke(&vec![f64::NAN]);
+    // rejecting the bounds is also fine
+    if let Ok(t) = impute_f64((1.0, 1.0f64.next_up())) {
+        let _ = t.invoke(&vec![f64::NAN]);
+    }
 }
 
-// FINDING: narrow f64 bounds are accepted by the constructor, but each imputed row then takes
-// time proportional to max(|lower|, |upper|) / (upper - lower) inside `Uniform::new`.
+// E: imputing between adjacent f64 values finishes promptly (or the bounds are rejected).
+// Fails for the known issue: narrow bounds are accepted, but each imputed row then takes time
+// proportional to max(|lower|, |upper|) / (upper - lower) inside `Uniform::new`.
 // Adjacent values never finish, and wider bounds are still slow per row:
 // (1, 1 + 1e-10) takes about 2 s per row, and a one-second window at a Unix timestamp
 // (1.7e9, 1.7e9 + 1) about 250 ms per row, in release builds.
 // The probe runs in a child process, since it hangs.
 #[test]
-fn test_impute_adjacent_bounds_hang() {
+#[should_panic(expected = "known issue: slow narrow bounds")]
+fn test_impute_adjacent_bounds_finish() {
     let result = run_ignored_test(
         "transformations::impute::test_props::probe_impute_adjacent_bounds",
         std::time::Duration::from_secs(10),
     );
-    assert!(
-        result.is_none(),
-        "expected the probe to hang, but it finished: {result:?}"
-    );
+    match result {
+        Some((status, stderr)) => assert!(status.success(), "the probe failed: {stderr}"),
+        None => panic!("known issue: slow narrow bounds: the probe didn't finish in 10 seconds"),
+    }
 }

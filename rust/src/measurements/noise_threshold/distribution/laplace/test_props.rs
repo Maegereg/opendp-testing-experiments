@@ -14,12 +14,16 @@
 //! * D: noise, release probabilities and independence (statistical)
 //! * E: large maps, extreme values, distances and scales
 //!
-//! FINDING (F1): δ is computed from `P[Z > T - l∞]`, but a key is released when `v + Z ≥ T`,
+//! Known issues F1 and F2, below: tests of the correct behavior that fail because of an issue
+//! are marked `#[should_panic(expected = "known issue F…")]`, and properties skip the affected
+//! cases while the issue's flag is set ([`KNOWN_F2`]). When an issue is fixed, those tests fail:
+//! remove their `should_panic`, and clear the flag.
+//!
+//! F1: δ is computed from `P[Z > T - l∞]`, but a key is released when `v + Z ≥ T`,
 //! so the δ needed is `P[Z ≥ T - l∞]`, larger by a factor of `e^{1/scale}`.
 //! The privacy map therefore underestimates δ, and the measurement isn't (ε, δ)-DP for the δ it claims.
-//! Tests marked FINDING pin this, and flip when it's fixed.
 //!
-//! FINDING (F2): a float threshold is rounded to the nearest multiple of `2^k`,
+//! F2: a float threshold is rounded to the nearest multiple of `2^k`,
 //! so values below the threshold can be released.
 
 use std::collections::HashMap;
@@ -207,6 +211,9 @@ macro_rules! impl_threshold_atom_float {
     )+};
 }
 impl_threshold_atom_float!(f32 f64);
+
+/// Known issue F2: float thresholds are rounded to the granularity. See the module docs.
+const KNOWN_F2: bool = true;
 
 // ---------------------------------------------------------------------------------------------
 // Generators
@@ -487,6 +494,20 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
     }
 
     // B: the function
+    // While F2 is known, released values are only checked against the threshold on the grid
+    let bar = if KNOWN_F2 {
+        T::release(&t_int, k)
+    } else {
+        case.threshold.clone()
+    };
+    let passes_bar = |r: &T| {
+        if case.threshold.keeps_below() {
+            r.exact() <= bar.exact()
+        } else {
+            r.exact()
+                .is_none_or(|r| bar.exact().is_some_and(|t| r >= t))
+        }
+    };
     for x in [&case.data, &case.other] {
         let out = ok(m.invoke(x))?;
         for (key, released) in &out {
@@ -508,17 +529,9 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
                 released,
                 k
             );
-            // B: released values pass the (rounded) threshold, and integer saturation never wraps
-            let threshold_value = T::release(&t_int, k);
-            let ok_side = if case.threshold.keeps_below() {
-                released.exact() <= threshold_value.exact()
-            } else {
-                released
-                    .exact()
-                    .is_none_or(|r| threshold_value.exact().is_some_and(|t| r >= t))
-            };
+            // B: released values pass the threshold, and integer saturation never wraps
             prop_assert!(
-                ok_side,
+                passes_bar(released),
                 "released {:?} doesn't pass threshold {:?}",
                 released,
                 case.threshold
@@ -532,7 +545,13 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
             // B: without noise, exactly the passing keys are released
             let expected = x
                 .iter()
-                .filter(|(_, v)| passes(&v.shift(k), &t_int))
+                .filter(|(_, v)| {
+                    if KNOWN_F2 {
+                        passes(&v.shift(k), &t_int)
+                    } else {
+                        passes_bar(&T::release(&v.shift(k), k))
+                    }
+                })
                 .count();
             prop_assert_eq!(out.len(), expected);
         }
@@ -595,10 +614,22 @@ proptest! {
         }
     }
 
-    // FINDING (F1): for a key present in only one map, with count v ≤ T, the exact divergence
-    // is the probability that it's released, P[Z ≥ T - v], which exceeds the claimed δ
+}
+
+proptest! {
+    // proptest would save the failing seed, and shrinking it is slow
+    #![proptest_config(ProptestConfig {
+        failure_persistence: None,
+        max_shrink_iters: 0,
+        ..ProptestConfig::default()
+    })]
+
+    // C: for a key present in only one map, with count v ≤ T, the exact divergence is the
+    // probability that it's released, P[Z ≥ T - v], which δ must cover. Fails for F1:
+    // δ is P[Z > T - v], one step of the noise distribution short
     #[test]
-    fn prop_finding_absent_key_exceeds_delta(
+    #[should_panic(expected = "known issue F1")]
+    fn prop_absent_key_within_delta(
         // P[Z ≥ T - v] = α^(T - v) / (1 + α) is at least about 1e-12 when T - v ≤ 27 scale,
         // and below about 1e-16 δ is dominated by its conservative rounding in f64
         (scale, threshold, v_offset) in (0.3f64..20., 1i64..30).prop_flat_map(|(s, t)| {
@@ -610,51 +641,59 @@ proptest! {
         let m = i64_threshold(scale, threshold);
         let (eps, delta) = ok(m.map(&(1, v as f64, v as f64)))?;
         let (lower, _) = single_key_hockey_stick(scale, Some(v), None, threshold, eps);
-        prop_assert!(lower > delta, "expected the divergence {} to exceed δ {}", lower, delta);
-        // ... by exactly one step of the noise distribution: δ is P[Z > T - v]
-        let intended = discrete_laplace_tail_ge(scale, (threshold - v + 1) as f64);
-        prop_assert!((delta - intended).abs() <= 1e-9 * intended.max(1e-300) + 1e-15);
-    }
-}
-
-// FINDING (F1): the minimal case. With scale 1 and threshold 1, the map claims δ = P[Z > 0],
-// but the empty map never releases `a` while `{a: 1}` releases it with probability P[Z ≥ 0].
-#[test]
-fn test_finding_delta_off_by_one() -> Fallible<()> {
-    let m = i64_threshold(1.0, 1);
-    let (eps, delta) = m.map(&(1, 1.0, 1.0))?;
-    let a = (-1.0f64).exp();
-    assert_eq!(eps, 1.0);
-    assert!((delta - a / (1.0 + a)).abs() < 1e-12, "δ = {delta}");
-    let released = 1.0 / (1.0 + a);
-    assert!(
-        released > 2.0 * delta,
-        "P[release] = {released}, δ = {delta}"
-    );
-    // the float path has the same off-by-one
-    let m = f64::make(false, 1.0, 1.0, Some(0))?;
-    let (_, delta) = m.map(&(1, 1.0, 1.0))?;
-    // rounding adds 1 - 2^k_min to l∞, which floors back to 1
-    assert!((delta - a / (1.0 + a)).abs() < 1e-12, "δ = {delta}");
-    Ok(())
-}
-
-// FINDING (F1), C: l0 keys at the threshold, against the empty map.
-// The map's formula is otherwise exact: correcting the tail argument by one recovers the requirement.
-#[test]
-fn test_finding_several_absent_keys() -> Fallible<()> {
-    for (scale, threshold, l0) in [(1.0, 3, 1), (2.0, 5, 3), (5.0, 10, 10)] {
-        let m = i64_threshold(scale, threshold);
-        let (_, delta) = m.map(&(l0, threshold as f64 * l0 as f64, threshold as f64))?;
-        let required = any_of(discrete_laplace_tail_ge(scale, 0.0), l0 as f64);
-        let intended = any_of(discrete_laplace_tail_ge(scale, 1.0), l0 as f64);
-        assert!(delta < required, "δ = {delta} covers {required}");
-        assert!(
-            (delta - intended).abs() <= 1e-9 * intended,
-            "δ = {delta}, intended {intended}"
+        prop_assert!(
+            lower <= delta * (1.0 + 1e-9),
+            "known issue F1: the divergence {} exceeds δ {}", lower, delta
         );
     }
-    Ok(())
+}
+
+/// δ for one key at count 1 against the empty map, with scale 1 and threshold 1:
+/// the empty map never releases the key, and `{a: 1}` releases it with probability P[Z ≥ 0].
+fn check_minimal_absent_key(delta: f64) {
+    let a = (-1.0f64).exp();
+    let released = 1.0 / (1.0 + a);
+    assert!(
+        delta >= released,
+        "known issue F1: δ = {delta} doesn't cover P[release] = {released}"
+    );
+}
+
+// C: the minimal case of F1, on the integer path
+#[test]
+#[should_panic(expected = "known issue F1")]
+fn test_delta_covers_absent_key_int() {
+    let (eps, delta) = i64_threshold(1.0, 1).map(&(1, 1.0, 1.0)).unwrap();
+    assert_eq!(eps, 1.0);
+    check_minimal_absent_key(delta);
+}
+
+// C: the minimal case of F1, on the float path
+// (rounding adds 1 - 2^k_min to l∞, which floors back to 1)
+#[test]
+#[should_panic(expected = "known issue F1")]
+fn test_delta_covers_absent_key_float() {
+    let m = f64::make(false, 1.0, 1.0, Some(0)).unwrap();
+    let (_, delta) = m.map(&(1, 1.0, 1.0)).unwrap();
+    check_minimal_absent_key(delta);
+}
+
+// C: l0 keys at the threshold, against the empty map: δ must cover the probability that any is
+// released. Fails for F1; correcting the map's tail argument by one would make it exact.
+#[test]
+#[should_panic(expected = "known issue F1")]
+fn test_delta_covers_several_absent_keys() {
+    for (scale, threshold, l0) in [(1.0, 3, 1), (2.0, 5, 3), (5.0, 10, 10)] {
+        let m = i64_threshold(scale, threshold);
+        let (_, delta) = m
+            .map(&(l0, threshold as f64 * l0 as f64, threshold as f64))
+            .unwrap();
+        let required = any_of(discrete_laplace_tail_ge(scale, 0.0), l0 as f64);
+        assert!(
+            delta >= required * (1.0 - 1e-9),
+            "known issue F1: δ = {delta} doesn't cover {required}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -836,14 +875,17 @@ fn test_threshold_float_extremes() -> Fallible<()> {
     Ok(())
 }
 
-// FINDING (F2): a float threshold is rounded to the nearest multiple of 2^k,
-// so values below the threshold can be released: here 1.0 with threshold 1.3
+// B: values below a float threshold aren't released, even when the threshold isn't on the grid.
+// Fails for F2: with granularity 1, the threshold 1.3 is rounded to 1, and 1.0 is released
 #[test]
-fn test_finding_float_threshold_rounded() -> Fallible<()> {
-    let m = f64::make(false, 0.0, 1.3, Some(0))?;
-    let out = m.invoke(&HashMap::from([(0u32, 1.0f64)]))?;
-    assert_eq!(out, HashMap::from([(0u32, 1.0)]));
-    Ok(())
+#[should_panic(expected = "known issue F2")]
+fn test_float_threshold_off_grid() {
+    let m = f64::make(false, 0.0, 1.3, Some(0)).unwrap();
+    let out = m.invoke(&HashMap::from([(0u32, 1.0f64)])).unwrap();
+    assert!(
+        out.is_empty(),
+        "known issue F2: released {out:?} below the threshold 1.3"
+    );
 }
 
 // Float thresholds must be non-negative and finite, including -0.0; integer thresholds may be negative
