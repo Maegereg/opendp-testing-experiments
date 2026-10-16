@@ -25,8 +25,11 @@ Tests named ``test_finding_*``, and branches marked FINDING, pin issues in the l
 * when Polars coerces the column to the fill's type (int to float or string),
   OpenDP still declares the original dtype
 * a fill that is a failing cast is declared non-null, so nulls remain in a "non-null" column
-* in a grouped aggregation with known lengths, ``filter(...).fill_null(...)`` forgets
-  that the filter changed the lengths, so ``dp.mean`` is charged infinite loss
+* in a grouped aggregation with known lengths, ``filter(...).fill_null(...)`` (and
+  ``fill_nan``) forgets that the filter changed the lengths: a sum is charged as if nothing
+  were filtered, so a change to one row can move it beyond its sensitivity, a privacy
+  violation. ``dp.sum`` fills nulls itself, so ``filter(...).dp.sum(...)`` is affected
+  even without a fill; and ``dp.mean`` is charged infinite loss
 * a boolean column filled with a number is accepted, though Polars can't run it
 """
 
@@ -66,6 +69,7 @@ from _props import (  # noqa: E402
     neighbors,
     row_key,
     row_multiset,
+    rows,
     symmetric_distance,
     to_lazyframe,
     value_key,
@@ -494,18 +498,39 @@ def test_polars_fill_null_keeps_invariants(fill: Fill):
     assert delta > 0.0
 
 
+#: Filters in a grouped aggregation: on the grouping key, which changing a row within its
+#: group can't flip, and on values, which it can.
+_KEY_PREDICATES = [pl.col("k") > 0]
+_VALUE_PREDICATES = [
+    pl.col("i") > 1,
+    pl.col("i").is_null(),
+    pl.col("f") > 0,
+    pl.col("flag").fill_null(False),
+]
+_PREDICATES = _KEY_PREDICATES + _VALUE_PREDICATES
+_SUMMED_PREDICATES = [pl.col("i") > 1, pl.col("i") < 0, pl.col("i").is_null()]
+
+#: Clipping bounds, including some that exclude 0, where a row that's filtered out
+#: (and contributes nothing) differs from every row that's kept.
+_SUM_BOUNDS = [(-5, 5), (0, 4), (2, 3)]
+
+
+def _grouped_domain(invariant: str):
+    return frame_domain(
+        [Margin(by=[pl.col("k")], invariant=invariant, max_length=50, max_groups=3)]
+    )
+
+
 @given(
     fill=st.sampled_from(_INT_LITERAL_FILLS),
-    filtered=st.booleans(),
-    invariant=st.sampled_from([None, "keys", "lengths"]),
+    pred=st.sampled_from(_PREDICATES),
+    bounds=st.sampled_from(_SUM_BOUNDS),
+    invariant=st.sampled_from(["keys", "lengths"]),
 )
-def test_polars_fill_null_grouped_losses(fill: Fill, filtered, invariant):
-    domain = frame_domain(
-        [Margin(by=[pl.col("k")], invariant=invariant or "keys", max_length=50)]
-    )
+def test_polars_fill_null_grouped_losses(fill: Fill, pred, bounds, invariant):
+    domain = _grouped_domain(invariant)
     lf = to_lazyframe([])
-    pred = pl.col("k") > 0
-    column = pl.col("i").filter(pred) if filtered else pl.col("i")
+    i = pl.col("i")
 
     def loss(agg):
         try:
@@ -519,24 +544,120 @@ def test_polars_fill_null_grouped_losses(fill: Fill, filtered, invariant):
             return math.inf
 
     # D3: filling before or after an expression filter costs the same
-    for make in [
-        lambda c: c.dp.sum((-5, 5), scale=1.0),
-        lambda c: c.dp.mean((-5, 5), scale=1.0),
+    for name, make in [
+        ("sum", lambda c: c.clip(*bounds).sum().dp.noise(scale=1.0)),
+        ("dp.sum", lambda c: c.dp.sum(bounds, scale=1.0)),
+        ("dp.mean", lambda c: c.dp.mean(bounds, scale=1.0)),
     ]:
-        before = loss(make(column.fill_null(fill.expr)))
-        after = loss(
-            make(
-                pl.col("i").fill_null(fill.expr).filter(pred)
-                if filtered
-                else pl.col("i").fill_null(fill.expr)
+        unfiltered = loss(make(i.fill_null(fill.expr)))
+        fill_then_filter = loss(make(i.fill_null(fill.expr).filter(pred)))
+        filter_then_fill = loss(make(i.filter(pred).fill_null(fill.expr)))
+        assert unfiltered < math.inf
+        if invariant != "lengths":
+            assert filter_then_fill == fill_then_filter < math.inf
+            continue
+
+        # FINDING: with known lengths, a fill after the filter forgets the filter
+        if name == "dp.mean":
+            # the mean releases its length without noise, but the length's accounting
+            # sees the filter
+            event("FINDING: filter-then-fill mean is charged infinite loss")
+            assert fill_then_filter < math.inf
+            assert filter_then_fill == math.inf
+        elif name == "dp.sum":
+            # dp.sum fills nulls itself, after any filter, so either order (or no explicit
+            # fill at all) is charged as if nothing were filtered
+            event("FINDING: dp.sum after a filter is charged as unfiltered")
+            assert fill_then_filter == filter_then_fill == unfiltered
+            assert loss(make(i.filter(pred))) == unfiltered
+        else:
+            event("FINDING: filter-then-fill sum is charged as unfiltered")
+            assert filter_then_fill == unfiltered
+            assert fill_then_filter >= unfiltered
+            if filter_then_fill < fill_then_filter:
+                event("FINDING: filter-then-fill sum is charged less")
+
+
+#: Ways to release the sum of a filtered column with noise of a given scale: an explicit
+#: fill before or after the filter, then clip, sum and add noise; or dp.sum, which fills
+#: nulls itself, after the filter.
+_FILTERED_SUMS = {
+    "fill, filter, sum": lambda i, fill, pred, b, scale: (
+        i.fill_null(fill).filter(pred).clip(*b).sum().dp.noise(scale)
+    ),
+    "filter, fill, sum": lambda i, fill, pred, b, scale: (
+        i.filter(pred).fill_null(fill).clip(*b).sum().dp.noise(scale)
+    ),
+    "fill, filter, dp.sum": lambda i, fill, pred, b, scale: (
+        i.fill_null(fill).filter(pred).dp.sum(b, scale=scale)
+    ),
+    "filter, dp.sum": lambda i, fill, pred, b, scale: i.filter(pred).dp.sum(
+        b, scale=scale
+    ),
+}
+#: Only this way accounts for the filter.
+_SOUND_SUMS = {"fill, filter, sum"}
+
+
+@given(
+    data=datasets(),
+    fill=st.sampled_from(_INT_LITERAL_FILLS),
+    # mostly filters on the summed column, so that changing its value can flip them
+    pred=st.sampled_from(_SUMMED_PREDICATES) | st.sampled_from(_PREDICATES),
+    # bounds that exclude 0 are where a filtered row differs most from a kept one
+    bounds=st.sampled_from([(2, 3), (1, 4)]) | st.sampled_from(_SUM_BOUNDS),
+    how=st.sampled_from(list(_FILTERED_SUMS)),
+    seed=st.data(),
+)
+def test_polars_fill_null_filtered_sum_sensitivity(
+    data, fill: Fill, pred, bounds, how, seed
+):
+    assume(data)
+    domain = _grouped_domain("lengths")
+
+    # neighbors under known lengths: change one row, keeping its group;
+    # often only the summed value, which the filters mostly depend on
+    j = seed.draw(st.integers(0, len(data) - 1))
+    other = list(data)
+    if seed.draw(st.booleans()):
+        other[j] = (seed.draw(st.none() | st.integers(-5, 5)),) + data[j][1:]
+    else:
+        new = seed.draw(rows())
+        other[j] = new[:3] + (data[j][3],) + new[4:]
+
+    # D5: the sums move by at most the sensitivity, which is the loss at noise scale 1
+    def private(scale, **kwargs):
+        plan = (
+            to_lazyframe([])
+            .group_by("k")
+            .agg(
+                _FILTERED_SUMS[how](pl.col("i"), fill.expr, pred, bounds, scale).alias(
+                    "sum"
+                )
             )
         )
-        if before != after and filtered and invariant == "lengths":
-            # FINDING: the fill forgets the filter, so the mean's known length conflicts
-            event("FINDING: filter-then-fill mean is charged infinite loss")
-            assert before == math.inf and after < math.inf
-            continue
-        assert before == after < math.inf
+        return dp.m.make_private_lazyframe(
+            domain, dp.symmetric_distance(), dp.max_divergence(), plan, **kwargs
+        )
+
+    sensitivity = private(1.0).map(2)
+    release = private(None, global_scale=0.0)
+    a = dict(release(to_lazyframe(data)).collect().rows())
+    b = dict(release(to_lazyframe(other)).collect().rows())
+    assert a.keys() == b.keys()
+    shift = sum(abs(a[g] - b[g]) for g in a)
+    if shift <= sensitivity:
+        event("sensitivity holds")
+        return
+
+    # FINDING: a fill after the filter (explicit, or dp.sum's own) forgets the filter, so
+    # the sum is charged as if every row contributed a value within the bounds,
+    # though a filtered row contributes nothing
+    event(f"FINDING: {how} moves beyond its sensitivity")
+    assert how not in _SOUND_SUMS
+    assert (
+        bounds[0] > 0 or bounds[1] < 0 or max(map(abs, bounds)) > bounds[1] - bounds[0]
+    )
 
 
 @context_settings
@@ -816,10 +937,121 @@ def test_finding_nullable_cast_fill():
     assert not _member(t.output_domain, t(lf))
 
 
+@pytest.mark.parametrize(
+    "fill_then_filter, filter_then_fill, column",
+    [
+        (
+            pl.col("i").fill_null(0).filter(pl.col("i") > 1),
+            pl.col("i").filter(pl.col("i") > 1).fill_null(0),
+            "i",
+        ),
+        (
+            pl.col("g").fill_null(0.0).fill_nan(0.0).filter(pl.col("g") > 1),
+            pl.col("g").fill_null(0.0).filter(pl.col("g") > 1).fill_nan(0.0),
+            "g",
+        ),
+    ],
+    ids=["fill_null", "fill_nan"],
+)
+def test_finding_filter_then_fill_undercharges_sum(
+    fill_then_filter, filter_then_fill, column
+):
+    """FINDING (privacy violation): in a grouped aggregation, the fill's output context is
+    its input's, so a preceding filter's effect is forgotten. With known lengths, a sum
+    after filter-then-fill is charged as if nothing were filtered: changing one row
+    is assumed to move it by at most ``upper - lower``. But a changed row can switch from
+    filtered out (contributing nothing) to kept: with bounds (2, 3), the sum moves by 3,
+    while the claimed sensitivity is 1."""
+    domain = _grouped_domain("lengths")
+    index = list(SCHEMA).index(column)
+
+    def frame(values):
+        rows_ = []
+        for v in values:
+            row = [None] * len(SCHEMA)
+            row[3], row[index] = 0, v
+            rows_.append(tuple(row))
+        return to_lazyframe(rows_)
+
+    # neighbors with the same group lengths: the first row changes, and passes the filter
+    a, b = frame([1, 3, 3]), frame([3, 3, 3])
+    if column == "g":
+        a, b = frame([1.0, 3.0, 3.0]), frame([3.0, 3.0, 3.0])
+
+    def plan(c, scale=None):
+        return to_lazyframe([]).group_by("k").agg(c.clip(2, 3).sum().dp.noise(scale))
+
+    def sensitivity(c):
+        # the loss at noise scale 1
+        return dp.m.make_private_lazyframe(
+            domain, dp.symmetric_distance(), dp.max_divergence(), plan(c, 1.0)
+        ).map(2)
+
+    for c in [fill_then_filter, filter_then_fill]:
+        release = zero_noise(domain, plan(c))
+        assert release(a).collect()[column].item() == pytest.approx(6)
+        assert release(b).collect()[column].item() == pytest.approx(9)
+
+    # the change moves the sum by 3: fill-then-filter allows for it, filter-then-fill doesn't
+    assert sensitivity(fill_then_filter) == pytest.approx(6)
+    assert sensitivity(filter_then_fill) == pytest.approx(1)
+
+
+def test_finding_filtered_dp_sum_undercharged():
+    """FINDING (privacy violation): ``dp.sum`` fills nulls (and NaNs) itself before clipping,
+    after any filter, so the same reset applies with no fill in the query, even to a
+    non-null column. With known lengths, ``x.filter(x > 1).dp.sum((2, 3))`` is calibrated
+    for a sensitivity of 1, but changing one row moves it by 3."""
+    schema = {"x": pl.Int64, "k": pl.Int64}
+    domain = dp.with_margin(
+        dp.lazyframe_domain(
+            [
+                dp.series_domain("x", dp.atom_domain(T="i64")),
+                dp.series_domain("k", dp.atom_domain(T="i64")),
+            ]
+        ),
+        Margin(by=[pl.col("k")], invariant="lengths", max_length=50, max_groups=3),
+    )
+    a = pl.LazyFrame({"x": [1, 3, 3], "k": [0, 0, 0]}, schema=schema)
+    b = pl.LazyFrame({"x": [3, 3, 3], "k": [0, 0, 0]}, schema=schema)
+    x = pl.col("x")
+
+    def private(agg, **kwargs):
+        return dp.m.make_private_lazyframe(
+            domain,
+            dp.symmetric_distance(),
+            dp.max_divergence(),
+            a.group_by("k").agg(agg),
+            **kwargs,
+        )
+
+    release = private(x.filter(x > 1).dp.sum((2, 3)), global_scale=0.0)
+    assert (release(a).collect()["x"].item(), release(b).collect()["x"].item()) == (
+        6,
+        9,
+    )
+    # the loss at noise scale 1 is the sensitivity: 1, though the sum moves by 3
+    assert private(x.filter(x > 1).dp.sum((2, 3), scale=1.0)).map(2) == 1.0
+    # an explicit clip and sum accounts for the filter
+    assert private(x.filter(x > 1).clip(2, 3).sum().dp.noise(scale=1.0)).map(2) == 6.0
+
+    # the Context API calibrates the noise to the same sensitivity
+    context = dp.Context.compositor(
+        data=a,
+        privacy_unit=dp.unit_of(changes=1),
+        privacy_loss=dp.loss_of(epsilon=1.0),
+        split_evenly_over=1,
+        margins=[Margin(by=["k"], invariant="lengths", max_length=50, max_groups=3)],
+    )
+    query = context.query().group_by("k").agg(x.filter(x > 1).dp.sum((2, 3)))
+    assert query.summarize()["scale"].to_list() == [1.0]
+
+
 def test_finding_filter_then_fill_forgets_filter():
     """FINDING: in a grouped aggregation, the fill's output context is the input's,
     so a preceding filter's effect on lengths is forgotten. With known lengths, ``dp.mean``
-    then treats the length as public, but its accounting doesn't, and the loss is infinite."""
+    then treats the length as public, but its accounting doesn't, and the loss is infinite.
+    (``test_finding_filter_then_fill_undercharges_sum`` shows the effect on sums.)"""
     domain = frame_domain(
         [Margin(by=[pl.col("k")], invariant="lengths", max_length=50)]
     )
