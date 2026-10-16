@@ -3,7 +3,6 @@
 Component suites (for example ``polars/test_polars_filter_props.py``
 and ``extras/test_np_clamp_props.py``) build their strategies and checks out of these pieces:
 
-* hypothesis profiles: "opendp" by default, and "stress" with ``HYPOTHESIS_PROFILE=stress``
 * exact identities for values, rows and arrays (floats by their bits), and exact dataset distances
 * edge-biased float strategies and 2-D NumPy arrays built from them
 * exact L1 and L2 norms, computed in rationals so that rounding, underflow and overflow can't hide a failure
@@ -11,6 +10,8 @@ and ``extras/test_np_clamp_props.py``) build their strategies and checks out of 
 * ``time_limit``, to detect calls that hang
 
 Importable as ``test._props_common``: the rootdir ``conftest.py`` puts ``python/`` on ``sys.path``.
+That ``conftest.py`` also registers the hypothesis profiles: "opendp" by default,
+and "stress" with ``HYPOTHESIS_PROFILE=stress``.
 """
 
 from __future__ import annotations
@@ -26,17 +27,7 @@ from contextlib import contextmanager
 from fractions import Fraction
 from typing import Any, Callable, Hashable, Iterable, Iterator, Literal, Sequence
 
-from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
-
-for _name, _examples in [("opendp", 100), ("stress", 2000)]:
-    settings.register_profile(
-        _name,
-        deadline=None,  # FFI calls have unpredictable latency
-        max_examples=_examples,
-        suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
-    )
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "opendp"))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -184,13 +175,17 @@ def member_reason(domain, x) -> str | None:
 def time_limit(seconds: float) -> Iterator[None]:
     """Raises ``TimeoutError`` if the block runs longer than ``seconds``.
 
-    Works in the main thread on Unix. The alarm is delivered between Python bytecodes,
+    Works in the main thread on Unix; elsewhere, the calling test is skipped. The alarm is delivered between Python bytecodes,
     so it interrupts Python loops, including those in callbacks run by the OpenDP library.
     There, the ``TimeoutError`` is wrapped in another exception, so this re-raises it.
 
     An alarm can interrupt NumPy's ``errstate`` as it is entered or exited,
     so NumPy's floating-point error handling is restored afterwards.
     """
+    if not hasattr(signal, "SIGALRM"):
+        import pytest
+
+        pytest.skip("time_limit needs SIGALRM, which this platform doesn't have")
     numpy = sys.modules.get("numpy")
     saved_errors = numpy.geterr() if numpy else None
     fired = False

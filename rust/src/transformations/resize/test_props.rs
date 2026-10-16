@@ -215,7 +215,7 @@ where
     let input_domain = case.input_domain();
     let size = case.size;
 
-    // A1: construction succeeds exactly when the size is positive and the constant is in the domain
+    // A: construction succeeds exactly when the size is positive and the constant is in the domain
     let t = make_resize::<T, MI, MO>(
         input_domain.clone(),
         MI::default(),
@@ -228,13 +228,13 @@ where
         return Ok(());
     };
 
-    // A2: the output domain is the input domain with the new size, replacing any input size
+    // A: the output domain is the input domain with the new size, replacing any input size
     prop_assert!(t.input_domain == input_domain);
     prop_assert!(t.input_metric == MI::default());
     prop_assert!(t.output_domain == input_domain.clone().with_size(size));
     prop_assert!(t.output_metric == MO::default());
 
-    // C1: the map is d -> 2d, or an error when that doesn't fit
+    // C: the map is d -> 2d, or an error when that doesn't fit
     let probes = [0, 1, u32::MAX / 2, u32::MAX / 2 + 1, u32::MAX];
     for d in probes.iter().chain(&case.distances) {
         match d.checked_mul(2) {
@@ -247,12 +247,12 @@ where
         let out = ok(t.invoke(x))?;
         let len = x.len();
 
-        // B1: always exactly `size` records, in the output domain
+        // B: always exactly `size` records, in the output domain
         prop_assert_eq!(out.len(), size);
         prop_assert!(ok(t.output_domain.member(&out))?);
 
         if len <= size {
-            // B2/B6: the input plus `size - len` copies of the constant, nothing else
+            // B: the input plus `size - len` copies of the constant, nothing else
             let mut expected = multiset_of(x);
             if len < size {
                 *expected.entry(case.constant.key()).or_insert(0) += size - len;
@@ -262,11 +262,11 @@ where
                 "imputation lost or added records"
             );
         } else {
-            // B3: a sub-multiset of the input
+            // B: a sub-multiset of the input
             prop_assert!(is_sub_multiset(&out, x), "truncation invented records");
         }
 
-        // B4: the deterministic branches keep the input order
+        // B: the deterministic branches keep the input order
         if len <= size && !<MO as MicrodataMetric>::ORDERED {
             let mut expected = keys(x);
             expected.extend((len..size).map(|_| case.constant.key()));
@@ -283,13 +283,13 @@ where
 
     let out = resize(&case.data)?;
 
-    // B5: the input's order doesn't change which records are output, wherever that is determined
+    // B: the input's order doesn't change which records are output, wherever that is determined
     let out_permuted = resize(&case.permuted)?;
     if case.data.len() <= size {
         prop_assert!(multiset_of(&out_permuted) == multiset_of(&out));
     }
 
-    // C2: in deterministic branches, outputs are no further apart than the map allows.
+    // C: in deterministic branches, outputs are no further apart than the map allows.
     // The exact insert-delete distance takes quadratic time, so it's skipped for large datasets.
     let deterministic = |x: &Vec<T>| deterministic::<MI, MO>(x.len(), size);
     let ordered = <MI as MicrodataMetric>::ORDERED || <MO as MicrodataMetric>::ORDERED;
@@ -342,7 +342,7 @@ where
     (VectorDomain<AtomDomain<i32>>, MI): MetricSpace,
     (VectorDomain<AtomDomain<i32>>, MO): MetricSpace,
 {
-    // C3: an empty dataset and a neighbor with one record resize to [c] and [v], at distance 2
+    // C: an empty dataset and a neighbor with one record resize to [c] and [v], at distance 2
     let t = make_resize::<i32, MI, MO>(VectorDomain::default(), MI::default(), 1, 0)?;
     let (x, x2) = (vec![], vec![7]);
     let d_in = MI::exact_distance(&x, &x2).unwrap() as u32;
@@ -406,7 +406,7 @@ fn subsets(n: i32, k: usize) -> Vec<Vec<i32>> {
         .collect()
 }
 
-// D1/D2: truncating unordered input keeps a uniformly random subset, whatever the input order
+// D: truncating unordered input keeps a uniformly random subset, whatever the input order
 #[test]
 fn test_resize_truncation_is_uniform() -> Fallible<()> {
     let t = make_resize::<i32, SymmetricDistance, SymmetricDistance>(
@@ -425,7 +425,7 @@ fn test_resize_truncation_is_uniform() -> Fallible<()> {
     Ok(())
 }
 
-// D3: imputing under an ordered output metric places the input records uniformly
+// D: imputing under an ordered output metric places the input records uniformly
 #[test]
 fn test_resize_imputation_placement_is_uniform() -> Fallible<()> {
     let t = make_resize::<i32, SymmetricDistance, InsertDeleteDistance>(
@@ -461,7 +461,7 @@ fn resize_i32(
     make_resize(VectorDomain::default(), SymmetricDistance, size, 0)
 }
 
-// E3/E6: huge sizes construct, the output domain records them exactly, and the map ignores them
+// E: huge sizes construct, the output domain records them exactly, and the map ignores them
 #[test]
 fn test_resize_huge_sizes_construct() -> Fallible<()> {
     for size in [
@@ -478,7 +478,7 @@ fn test_resize_huge_sizes_construct() -> Fallible<()> {
     Ok(())
 }
 
-// E5: a large dataset truncated to one record keeps one of its records
+// E: a large dataset truncated to one record keeps one of its records
 #[test]
 fn test_resize_large_dataset_to_one() -> Fallible<()> {
     let x = (0..1_000_000).collect::<Vec<i32>>();
@@ -491,7 +491,7 @@ fn test_resize_large_dataset_to_one() -> Fallible<()> {
     Ok(())
 }
 
-// E1/E2: a large imputation and a large truncation, in each deterministic branch
+// E: a large imputation and a large truncation, in each deterministic branch
 #[test]
 fn test_resize_large_deterministic() -> Fallible<()> {
     let t = make_resize::<i32, InsertDeleteDistance, SymmetricDistance>(
@@ -509,7 +509,7 @@ fn test_resize_large_deterministic() -> Fallible<()> {
     Ok(())
 }
 
-// E4: FINDING: imputing to a size whose buffer can't be described panics with a capacity overflow,
+// E: FINDING: imputing to a size whose buffer can't be described panics with a capacity overflow,
 // instead of returning an error. Construction accepts any positive size.
 #[test]
 fn test_resize_unallocatable_size_panics() -> Fallible<()> {
@@ -523,17 +523,23 @@ fn test_resize_unallocatable_size_panics() -> Fallible<()> {
 }
 
 /// Imputes to 2^45 records: 2^48 bytes of references, which passes the capacity check
-/// but exceeds the address space, so the allocation fails.
+/// but exceeds a 48-bit address space, so the allocation fails.
 /// Ignored, because a failed allocation aborts the process. Run by [`test_resize_unallocatable_size_aborts`].
+#[cfg(target_pointer_width = "64")]
 #[test]
 #[ignore]
 fn probe_resize_allocation_failure() {
+    if !in_probe_child() {
+        return;
+    }
     let _ = resize_i32(1 << 45).unwrap().invoke(&vec![1]);
 }
 
-// E4: FINDING: imputing to a size that passes the capacity check but can't be allocated
+// E: FINDING: imputing to a size that passes the capacity check but can't be allocated
 // aborts the whole process, instead of returning an error.
-// The probe runs in a child process, since the abort can't be caught.
+// The probe runs in a child process, since the abort can't be caught. It assumes a 64-bit
+// target with at most 48 bits of address space, where the allocation fails immediately.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn test_resize_unallocatable_size_aborts() {
     let (status, stderr) = run_ignored_test(

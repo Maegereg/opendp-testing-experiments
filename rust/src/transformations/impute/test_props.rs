@@ -257,7 +257,7 @@ where
     let input_domain = case.input_domain(sized);
     let (lower, upper) = case.bounds;
 
-    // A1: construction succeeds exactly when neither bound is NaN and lower < upper
+    // A: construction succeeds exactly when neither bound is NaN and lower < upper
     let t = make_impute_uniform_float::<M, T>(input_domain.clone(), M::default(), case.bounds);
     prop_assert_eq!(
         t.is_ok(),
@@ -269,7 +269,7 @@ where
         return Ok(());
     };
 
-    // A2: the output elements are any non-NaN float (input bounds are dropped), with the input size
+    // A: the output elements are any non-NaN float (input bounds are dropped), with the input size
     let mut output_domain = VectorDomain::new(AtomDomain::new_non_nan());
     output_domain.size = input_domain.size;
     prop_assert!(t.input_domain == input_domain);
@@ -277,26 +277,26 @@ where
     prop_assert!(t.output_domain == output_domain);
     prop_assert!(t.output_metric == M::default());
 
-    // C1: the map is the identity
+    // C: the map is the identity
     for d in [0, 1, u32::MAX].iter().chain(&case.distances) {
         prop_assert_eq!(ok(t.map(d))?, *d, "map({})", d);
     }
 
     let impute = |x: &Vec<T>| -> Result<Vec<T>, TestCaseError> {
         let out = ok(t.invoke(x))?;
-        // B1: in the output domain, so no NaN is left
+        // B: in the output domain, so no NaN is left
         prop_assert!(
             ok(t.output_domain.member(&out))?,
             "output isn't in the output domain"
         );
         check_row_wise(x, &out, |v, o| {
             if !v.is_nan() {
-                // B2/B4: non-NaN rows, including ±0, ±inf and subnormals, pass through bit for bit
+                // B: non-NaN rows, including ±0, ±inf and subnormals, pass through bit for bit
                 (v.key() == o.key())
                     .then_some(())
                     .ok_or(format!("{v:?} changed to {o:?}"))
             } else {
-                // B3/B5: imputed in [lower, upper), so equal to lower when the bounds are adjacent
+                // B: imputed in [lower, upper), so equal to lower when the bounds are adjacent
                 (lower <= *o && *o < upper)
                     .then_some(())
                     .ok_or(format!("imputed {o:?}, outside [{lower:?}, {upper:?})"))
@@ -307,11 +307,11 @@ where
 
     let out = impute(&case.data)?;
 
-    // C2/C3: with imputed rows relabelled as NaN, outputs are no further apart than inputs.
+    // C: with imputed rows relabelled as NaN, outputs are no further apart than inputs.
     // The exact insert-delete distance takes quadratic time, so it's skipped for large datasets.
     let affordable = |x: &[T]| !<M as MicrodataMetric>::ORDERED || x.len() <= 2_000;
     let (neighbor, _) = M::neighbor(&case.data, &case.edits, sized);
-    // B6: a permutation is imputed row by row too
+    // B: a permutation is imputed row by row too
     for other in [neighbor, case.permuted.clone(), case.other.clone()] {
         if sized && other.len() != case.data.len() {
             continue;
@@ -422,7 +422,7 @@ where
     M: PropDatasetMetric<Distance = IntDistance>,
     (VectorDomain<AtomDomain<f64>>, M): MetricSpace,
 {
-    // C4: changing one record changes one output record, so the constant 1 can't be lowered
+    // C: changing one record changes one output record, so the constant 1 can't be lowered
     let t = make_impute_uniform_float(
         VectorDomain::default().with_size(1),
         M::default(),
@@ -468,7 +468,7 @@ fn uniformity<T: ImputeAtom>() -> Fallible<()> {
     Ok(())
 }
 
-// D1: imputed values are uniform over the bounds, at every scale
+// D: imputed values are uniform over the bounds, at every scale
 #[test]
 fn test_impute_is_uniform() -> Fallible<()> {
     uniformity::<f32>()?;
@@ -499,14 +499,14 @@ fn independence<T: ImputeAtom>() -> Fallible<()> {
     check_chi_square_from_probs(&bin_counts(&firsts, bounds, 5), &uniform_probs(5))
 }
 
-// D2: imputed values are independent of each other, within and across invocations
+// D: imputed values are independent of each other, within and across invocations
 #[test]
 fn test_impute_is_independent() -> Fallible<()> {
     independence::<f32>()?;
     independence::<f64>()
 }
 
-// D3: over a range of a few f32 values, imputation is a continuous uniform draw rounded to
+// D: over a range of a few f32 values, imputation is a continuous uniform draw rounded to
 // the nearest float, so `lower` has half the probability of each other value.
 // This only costs accuracy, and it's pinned to describe the behavior.
 // (f64 ranges this narrow hang: see `test_impute_adjacent_bounds_hang`.)
@@ -551,7 +551,7 @@ fn overflowing_range<T: ImputeAtom>() -> Fallible<()> {
     Ok(())
 }
 
-// D4: FINDING: when `upper - lower` overflows, rand shrinks the width from infinity to MAX,
+// D: FINDING: when `upper - lower` overflows, rand shrinks the width from infinity to MAX,
 // so draws only cover [lower, lower + MAX). Over (-MAX, MAX) every imputed value is negative,
 // where a uniform draw would be non-negative half of the time.
 // Draws stay in bounds and are row-local, so this isn't a privacy failure.
@@ -565,7 +565,7 @@ fn test_impute_overflowing_range_is_biased() -> Fallible<()> {
 // E. Large datasets, extreme bounds and huge sizes
 // ---------------------------------------------------------------------------------------------
 
-// E2: a million NaN rows are all imputed in bounds
+// E: a million NaN rows are all imputed in bounds
 #[test]
 fn test_impute_large_dataset() -> Fallible<()> {
     let start = std::time::Instant::now();
@@ -591,7 +591,7 @@ fn extreme_bounds<T: ImputeAtom>(bounds: &[(T, T)]) -> Fallible<()> {
     Ok(())
 }
 
-// E3: extreme finite bounds construct and impute within bounds
+// E: extreme finite bounds construct and impute within bounds
 #[test]
 fn test_impute_extreme_bounds() -> Fallible<()> {
     macro_rules! extreme {
@@ -640,7 +640,7 @@ fn infinite_bounds<T: ImputeAtom>() -> Fallible<()> {
     Ok(())
 }
 
-// E4: FINDING: infinite bounds are accepted by the constructor,
+// E: FINDING: infinite bounds are accepted by the constructor,
 // but imputing any NaN then panics in `Uniform::new` ("non-finite boundaries").
 #[test]
 fn test_impute_infinite_bounds_panic() -> Fallible<()> {
@@ -648,7 +648,7 @@ fn test_impute_infinite_bounds_panic() -> Fallible<()> {
     infinite_bounds::<f64>()
 }
 
-// E5: huge sizes are kept in the output domain, and the map doesn't depend on them
+// E: huge sizes are kept in the output domain, and the map doesn't depend on them
 #[test]
 fn test_impute_huge_sizes() -> Fallible<()> {
     for size in [u32::MAX as usize, usize::MAX] {
@@ -668,6 +668,9 @@ fn test_impute_huge_sizes() -> Fallible<()> {
 #[test]
 #[ignore]
 fn probe_impute_adjacent_bounds() {
+    if !in_probe_child() {
+        return;
+    }
     let _ = impute_f64((1.0, 1.0f64.next_up()))
         .unwrap()
         .invoke(&vec![f64::NAN]);

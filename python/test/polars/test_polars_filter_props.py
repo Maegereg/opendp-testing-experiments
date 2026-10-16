@@ -14,11 +14,13 @@ Properties (labels match the comments below):
 * E: the expression filter is only accepted in aggregations, keeps keys public
   but not lengths, and computes exactly what Polars computes
 * F: queries built through the Context API respect the privacy budget and carry no data
+* G: large frames and extreme margin descriptors
 """
 
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
@@ -28,7 +30,7 @@ from hypothesis import assume, event, given, settings, strategies as st  # noqa:
 
 import opendp.prelude as dp  # noqa: E402
 
-from _props import (  # noqa: E402
+from test.polars._props import (  # noqa: E402
     Pred,
     accepted_predicates,
     build,
@@ -70,7 +72,7 @@ def test_polars_filter_construction(pred: Pred, margins):
     domain = frame_domain(margins)
     lf = to_lazyframe([])
 
-    # A1: accepted exactly when the predicate is supported, boolean and row-wise
+    # A: accepted exactly when the predicate is supported, boolean and row-wise
     t = build(
         lambda: dp.t.make_stable_lazyframe(
             domain, dp.symmetric_distance(), lf.filter(pred.expr)
@@ -80,7 +82,7 @@ def test_polars_filter_construction(pred: Pred, margins):
     if t is None:
         return
 
-    # A2: the schema and size descriptors are kept, but no invariant survives filtering
+    # A: the schema and size descriptors are kept, but no invariant survives filtering
     assert str(t.output_domain) == str(domain)
     for margin in margins:
         before, after = (
@@ -106,7 +108,7 @@ def test_polars_filter_matches_polars(data, pred: Pred):
         domain, dp.symmetric_distance(), lf.filter(pred.expr)
     )
 
-    # B1: exactly the rows Polars keeps (rows where the predicate is null are dropped)
+    # B: exactly the rows Polars keeps (rows where the predicate is null are dropped)
     out = t(lf)
     expected = frame_rows(lf.filter(pred.expr))
     assert row_multiset(frame_rows(out)) == row_multiset(expected)
@@ -118,10 +120,10 @@ def test_polars_filter_matches_polars(data, pred: Pred):
         else "some rows kept"
     )
 
-    # B2: the output is a member of the output domain
+    # B: the output is a member of the output domain
     assert t.output_domain.member(out)
 
-    # B3: filters compose with row-wise steps before and after
+    # B: filters compose with row-wise steps before and after
     plan = (
         lf.with_columns(j=pl.col("i") * 2)
         .filter(pred.expr)
@@ -142,7 +144,7 @@ def test_polars_filter_private_release_matches_polars(data, pred: Pred):
     domain = frame_domain([Margin(by=[], max_length=100)])
     lf = to_lazyframe(data)
 
-    # B4: aggregates of the filtered frame, released with no noise, equal plain Polars
+    # B: aggregates of the filtered frame, released with no noise, equal plain Polars
     plan = lf.filter(pred.expr).select(
         dp.len(signed=True),
         pl.col("i").fill_null(0).dp.sum((-5, 5)).alias("sum"),
@@ -181,11 +183,11 @@ def test_polars_filter_stability(data, pred: Pred, d, seed):
     if t is None:
         return
 
-    # C1: filtering doesn't change the stability map
+    # C: filtering doesn't change the stability map
     t_identity = dp.t.make_stable_lazyframe(domain, dp.symmetric_distance(), lf)
     assert t.map(d) == t_identity.map(d)
 
-    # C2: filtered neighbors are no further apart than the neighbors themselves.
+    # C: filtered neighbors are no further apart than the neighbors themselves.
     # This holds for any accepted predicate, including any that should have been rejected.
     other, k = seed.draw(neighbors(data))
     event(f"neighbor distance {k}")
@@ -213,7 +215,7 @@ def test_polars_filter_clears_length_invariant(pred: Pred):
     domain = frame_domain([Margin(by=[], invariant="lengths", max_length=100)])
     lf = to_lazyframe([])
 
-    # D1: the frame length is public before filtering, but not after
+    # D: the frame length is public before filtering, but not after
     assert _loss_at_zero_scale(domain, lf.select(dp.len(signed=True))) == 0.0
     assert (
         _loss_at_zero_scale(domain, lf.filter(pred.expr).select(dp.len(signed=True)))
@@ -236,7 +238,7 @@ def test_polars_filter_clears_key_invariant(pred: Pred):
             threshold=threshold,
         )
 
-    # D2: public keys can be released without a threshold, but not once rows are filtered
+    # D: public keys can be released without a threshold, but not once rows are filtered
     private(lf.group_by("k").agg(dp.len(signed=True)), dp.max_divergence())
     plan = lf.filter(pred.expr).group_by("k").agg(dp.len(signed=True))
     with pytest.raises(dp.OpenDPException, match="key-set"):
@@ -273,7 +275,7 @@ def test_polars_filter_keeps_size_descriptors(pred: Pred, contributions, max_len
             .to_list()
         )
 
-    # D3: a filter costs nothing extra: the noise scales match the unfiltered query
+    # D: a filter costs nothing extra: the noise scales match the unfiltered query
     assert scales(context.query().filter(pred.expr)) == scales(context.query())
 
 
@@ -292,7 +294,7 @@ def test_polars_expr_filter_construction(pred: Pred):
     domain = frame_domain([Margin(by=[pl.col("k")], invariant="keys", max_length=50)])
     lf = to_lazyframe([])
 
-    # E1: accepted in aggregations exactly when the predicate is supported, boolean and row-wise
+    # E: accepted in aggregations exactly when the predicate is supported, boolean and row-wise
     m = build(
         lambda: dp.m.make_private_lazyframe(
             domain,
@@ -331,7 +333,7 @@ def test_polars_expr_filter_matches_polars(data, pred: Pred, seed):
     lf = to_lazyframe(data)
     m = zero_noise(domain, lf.group_by("k").agg(_sum_filtered(pred)))
 
-    # E2: the release equals Polars, with every key, even those whose rows are all filtered out
+    # E: the release equals Polars, with every key, even those whose rows are all filtered out
     released = dict(m(lf).collect().rows())
     expected = _grouped_sums(lf, pred)
     assert released == expected
@@ -339,7 +341,7 @@ def test_polars_expr_filter_matches_polars(data, pred: Pred, seed):
     if any(v == 0 for v in expected.values()):
         event("a group sums to zero")
 
-    # E4: on neighbors with the same keys (the invariant), sums move within the sensitivity
+    # E: on neighbors with the same keys (the invariant), sums move within the sensitivity
     other, k = seed.draw(neighbors(data))
     assume({row[3] for row in other} == {row[3] for row in data})
     released_other = dict(m(to_lazyframe(other)).collect().rows())
@@ -352,7 +354,7 @@ def test_polars_expr_filter_matches_polars(data, pred: Pred, seed):
 def test_polars_expr_filter_keeps_keys_drops_lengths(pred: Pred):
     lf = to_lazyframe([])
 
-    # E3: keys stay public, so no threshold is needed under pure DP
+    # E: keys stay public, so no threshold is needed under pure DP
     keys = frame_domain([Margin(by=[pl.col("k")], invariant="keys", max_length=50)])
     dp.m.make_private_lazyframe(
         keys,
@@ -413,19 +415,84 @@ def test_polars_filter_context(data, pred: Pred, epsilon, contributions):
     )
     filtered = context.query().filter(pred.expr)
 
-    # F2: the plan built by the context never carries the data
+    # F: the plan built by the context never carries the data
     assert object.__getattribute__(filtered, "polars_plan").collect().height == 0
 
     query = filtered.select(
         dp.len(signed=True), pl.col("i").fill_null(0).dp.sum((-5, 5))
     )
 
-    # F1: the resolved measurement fits within this query's share of the budget,
+    # F: the resolved measurement fits within this query's share of the budget,
     # and releasing it spends exactly that share
     assert query.resolve().map(contributions) <= epsilon / 2
     released = query.release().collect()
     assert released.columns == ["len", "i"]
     assert context.remaining_privacy_loss() == [pytest.approx(epsilon / 2)]
+
+
+# ---------------------------------------------------------------------------------------------
+# G. Large sizes and extremes
+# ---------------------------------------------------------------------------------------------
+
+
+def test_polars_filter_large_frame():
+    n = 100_000
+    data = [
+        (r % 11 - 5 if r % 3 else None, None, "abc"[r % 3], r % 3, r % 2 == 0, None)
+        for r in range(n)
+    ]
+    lf = to_lazyframe(data)
+    pred = (pl.col("i") > 0) & pl.col("flag")
+
+    # G: the row filter keeps exactly Polars' rows, in reasonable time
+    start = time.monotonic()
+    t = dp.t.make_stable_lazyframe(
+        frame_domain(), dp.symmetric_distance(), lf.filter(pred)
+    )
+    out = frame_rows(t(lf))
+    assert time.monotonic() - start < 30
+    assert row_multiset(out) == row_multiset(frame_rows(lf.filter(pred)))
+
+    # ...and the expression filter's zero-noise release equals Polars, for every key
+    keyed = frame_domain([Margin(by=[pl.col("k")], invariant="keys", max_length=n)])
+    released = zero_noise(keyed, lf.group_by("k").agg(_sum_filtered(Pred(pred, "ok"))))
+    assert dict(released(lf).collect().rows()) == _grouped_sums(lf, Pred(pred, "ok"))
+
+
+@pytest.mark.parametrize(
+    "max_length, max_groups",
+    [(2**32 - 1, 1), (1, 2**32 - 1), (2**32 - 1, 2**32 - 1), (2**32 - 1, None)],
+)
+def test_polars_filter_extreme_margins(max_length, max_groups):
+    lf = to_lazyframe([])
+    pred = pl.col("i") > 0
+    domain = frame_domain(
+        [
+            Margin(by=[], max_length=max_length),
+            Margin(by=[pl.col("k")], max_length=max_length, max_groups=max_groups),
+        ]
+    )
+
+    # G: filtering keeps extreme descriptors, and releases after it have finite loss
+    t = dp.t.make_stable_lazyframe(domain, dp.symmetric_distance(), lf.filter(pred))
+    margin = t.output_domain.get_margin([pl.col("k")])
+    assert (margin.max_length, margin.max_groups) == (max_length, max_groups)
+    for plan in [
+        lf.filter(pred).select(dp.len(scale=1.0, signed=True)),
+        lf.filter(pred).select(pl.col("i").fill_null(0).dp.sum((-5, 5), scale=1.0)),
+        # keys are released with a threshold on the noisy length
+        lf.group_by("k").agg(dp.len(signed=True), _sum_filtered(Pred(pred, "ok"))),
+    ]:
+        m = dp.m.make_private_lazyframe(
+            domain,
+            dp.symmetric_distance(),
+            dp.approximate(dp.max_divergence()),
+            plan,
+            global_scale=1.0,
+            threshold=10,
+        )
+        epsilon, delta = m.map(1)
+        assert math.isfinite(epsilon) and 0 <= delta <= 1
 
 
 # ---------------------------------------------------------------------------------------------

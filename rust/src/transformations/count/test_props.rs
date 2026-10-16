@@ -123,13 +123,13 @@ fn check_u8_key<V: PropInt>(case: Case<u8>) -> TestResult {
 }
 
 fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
-    // A1: construction succeeds for any input domain
+    // A: construction succeeds for any input domain
     let t = ok(make_count_by::<K, V>(
         case.domain.clone(),
         SymmetricDistance,
     ))?;
 
-    // A2: input space is preserved, and keys of the output carry the input bounds
+    // A: input space is preserved, and keys of the output carry the input bounds
     prop_assert!(t.input_domain == case.domain);
     prop_assert!(t.input_metric == SymmetricDistance);
     prop_assert!(
@@ -145,7 +145,7 @@ fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
     let out = ok(t.invoke(&case.data))?;
     let mult = multiplicities(&case.data);
 
-    // B1/B2: exactly the distinct keys, each counted exactly, saturating at V::MAX
+    // B: exactly the distinct keys, each counted exactly, saturating at V::MAX
     prop_assert_eq!(out.len(), mult.len());
     for (k, n) in &mult {
         let Some(v) = out.get(*k) else {
@@ -154,16 +154,16 @@ fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
         prop_assert_eq!(big(*v), IBig::from(*n).min(max.clone()), "count of {:?}", k);
     }
 
-    // B4/B5: output is in the output domain, and empty input gives an empty map
+    // B: output is in the output domain, and empty input gives an empty map
     prop_assert!(ok(t.output_domain.member(&out))?);
     if case.data.is_empty() {
         prop_assert!(out.is_empty());
     }
 
-    // B3: the input metric is unordered, so the result can't depend on order
+    // B: the input metric is unordered, so the result can't depend on order
     prop_assert!(ok(t.invoke(&case.permuted))? == out);
 
-    // B6: adding a record increments only its key, unless saturated
+    // B: adding a record increments only its key, unless saturated
     if case.domain.size.is_none()
         && let Some((_, _, _, key)) = case.edits.first()
     {
@@ -177,13 +177,13 @@ fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
         prop_assert!(ok(t.invoke(&added))? == expected);
     }
 
-    // B7: with no saturation, counts add up to the number of records
+    // B: with no saturation, counts add up to the number of records
     if mult.values().all(|n| IBig::from(*n) <= max) {
         let total = out.values().fold(IBig::ZERO, |s, v| s + big(*v));
         prop_assert_eq!(total, IBig::from(case.data.len()));
     }
 
-    // C2/C3: the map is exactly (d, d, d), or fails because d isn't representable in V
+    // C: the map is exactly (d, d, d), or fails because d isn't representable in V
     let (x2, k) = neighbor(&case.data, &case.edits, case.domain.size.is_some(), false);
     let d_other = u32::try_from(symmetric_distance(&case.data, &case.other)).unwrap();
     let near_max = [
@@ -208,7 +208,7 @@ fn check<K: Hashable, V: PropInt>(case: Case<K>) -> TestResult {
         }
     }
 
-    // C1: stability, both for an edited neighbor and for an arbitrary dataset at its exact distance
+    // C: stability, both for an edited neighbor and for an arbitrary dataset at its exact distance
     for (x2, d) in [(x2, k), (case.other.clone(), d_other)] {
         let out2 = ok(t.invoke(&x2))?;
         let (l0, l1, linf) = map_distance_l01inf(&out, &out2);
@@ -286,7 +286,7 @@ fn test_count_by_saturation() -> Fallible<()> {
     let saturated = t.invoke(&vec![7; 300])?;
     assert_eq!(saturated, HashMap::from([(7, 255)]));
 
-    // C4: removing or adding a record to a saturated count can't move it by more than one
+    // C: removing or adding a record to a saturated count can't move it by more than one
     assert_eq!(t.invoke(&vec![7; 299])?, saturated);
     assert_eq!(t.invoke(&vec![7; 255])?, saturated);
     assert_eq!(t.invoke(&vec![7; 254])?, HashMap::from([(7, 254)]));

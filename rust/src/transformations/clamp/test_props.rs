@@ -145,7 +145,7 @@ where
     }
     let (l, u) = case.bounds.clone();
 
-    // A1: succeeds iff the domain excludes NaN, the bounds are ordered and non-NaN,
+    // A: succeeds iff the domain excludes NaN, the bounds are ordered and non-NaN,
     //     and the domain is sized whenever the metric requires it
     let must_succeed = !case.element_domain.nan()
         && !l.is_null()
@@ -161,7 +161,7 @@ where
     };
     prop_assert!(must_succeed, "constructor accepted invalid input");
 
-    // A2: output metric is the input metric, and output records carry exactly the clamp bounds
+    // A: output metric is the input metric, and output records carry exactly the clamp bounds
     prop_assert!(t.input_domain == domain);
     prop_assert!(t.input_metric == M::default());
     prop_assert!(t.output_metric == M::default());
@@ -177,10 +177,10 @@ where
         t.output_domain
     );
 
-    // B8: never fails on in-domain data
+    // B: never fails on in-domain data
     let out = ok(t.invoke(&case.data))?;
 
-    // B1/B7: each record is clamped independently
+    // B: each record is clamped independently
     let clamp = |v: &T| {
         if *v < l {
             l.clone()
@@ -193,18 +193,18 @@ where
     let expected = case.data.iter().map(clamp).collect::<Vec<_>>();
     prop_assert_eq!(keys(&out), keys(&expected));
 
-    // B2: output is in the output domain
+    // B: output is in the output domain
     prop_assert!(ok(t.output_domain.member(&out))?);
 
-    // B3: idempotent
+    // B: idempotent
     prop_assert_eq!(keys(&ok(t.invoke(&out))?), keys(&out));
 
-    // B4: data already within the bounds is unchanged
+    // B: data already within the bounds is unchanged
     if case.data.iter().all(|v| l <= *v && *v <= u) {
         prop_assert_eq!(keys(&out), keys(&case.data));
     }
 
-    // B5: monotone
+    // B: monotone
     for (xi, oi) in case.data.iter().zip(&out) {
         for (xj, oj) in case.data.iter().zip(&out).filter(|(xj, _)| xi <= *xj) {
             prop_assert!(
@@ -218,11 +218,11 @@ where
         }
     }
 
-    // B6: permuting the input permutes the output
+    // B: permuting the input permutes the output
     let out_permuted = ok(t.invoke(&case.permuted))?;
     prop_assert_eq!(symmetric_distance_by_key(&out, &out_permuted), 0);
 
-    // C1: the function doesn't increase the distance between any two datasets
+    // C: the function doesn't increase the distance between any two datasets
     let (neighbor, k) = M::neighbor(&case.data, &case.edits, case.sized);
     for x2 in [&neighbor, &case.permuted, &case.other] {
         let Some(d_in) = M::exact_distance(&case.data, x2) else {
@@ -239,7 +239,7 @@ where
         );
     }
 
-    // C2: the map is the identity
+    // C: the map is the identity
     let probes = [0, 1, 2, k, u32::MAX]
         .into_iter()
         .chain(case.distances.iter().copied());
@@ -400,7 +400,7 @@ fn small_pair() -> impl Strategy<Value = (f64, f64)> {
 }
 
 proptest! {
-    /// D1: whenever clamping pairs succeeds, each output lies within the bounds under the product order,
+    /// D: whenever clamping pairs succeeds, each output lies within the bounds under the product order,
     /// is in the output domain, and data already within the bounds is unchanged.
     /// See `test_clamp_pairs_fail_on_incomparable_values` for when it fails.
     #[test]

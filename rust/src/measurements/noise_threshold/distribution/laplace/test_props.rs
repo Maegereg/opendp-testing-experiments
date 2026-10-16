@@ -18,6 +18,9 @@
 //! so the δ needed is `P[Z ≥ T - l∞]`, larger by a factor of `e^{1/scale}`.
 //! The privacy map therefore underestimates δ, and the measurement isn't (ε, δ)-DP for the δ it claims.
 //! Tests marked FINDING pin this, and flip when it's fixed.
+//!
+//! FINDING (F2): a float threshold is rounded to the nearest multiple of `2^k`,
+//! so values below the threshold can be released.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -389,7 +392,7 @@ fn passes(z: &IBig, t: &IBig) -> bool {
 // ---------------------------------------------------------------------------------------------
 
 fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
-    // A1: construction succeeds exactly when the arguments are valid
+    // A: construction succeeds exactly when the arguments are valid
     let m = T::make(case.nan, case.scale, case.threshold.clone(), case.k);
     prop_assert_eq!(
         m.is_ok(),
@@ -403,12 +406,12 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
     let k = T::k_eff(case.k);
     let t_int = case.threshold.shift(k);
 
-    // A2: the output space
+    // A: the output space
     prop_assert!(
         m.input_domain == MapDomain::new(AtomDomain::default(), T::element_domain(case.nan))
     );
 
-    // A3, C1, C2: the privacy map, on the exact distance between the maps and on extra probes
+    // A, C: the privacy map, on the exact distance between the maps and on extra probes
     let mut probes = case.distances.clone();
     if let Some((l0, l1, li)) = map_distance_exact(&case.data, &case.other)
         && let (Some(l1), Some(li)) = (T::q_up(&l1), T::q_up(&li))
@@ -429,7 +432,7 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
             }
             (Expect::Value { eps, d, l0, scale }, actual) => {
                 let Ok((e, delta)) = actual else {
-                    // A3: only the tail bounds or ε may fail to compute, for extreme arguments
+                    // A: only the tail bounds or ε may fail to compute, for extreme arguments
                     let msg = format!("{:?}", actual.unwrap_err());
                     prop_assert!(
                         msg.contains("tail bound")
@@ -439,7 +442,7 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
                     );
                     continue;
                 };
-                // C1: ε is l1 / scale, rounded up
+                // C: ε is l1 / scale, rounded up
                 prop_assert!(
                     is_rounded_up(e, eps),
                     "map({:?}): ε = {}, exact {}",
@@ -447,14 +450,14 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
                     e,
                     eps
                 );
-                // A3: δ is a probability
+                // A: δ is a probability
                 prop_assert!(
                     (0.0..=1.0).contains(&delta),
                     "map({:?}): δ = {}",
                     d_in,
                     delta
                 );
-                // C2: δ bounds the probability that any of l0 keys at distance d from instability
+                // C: δ bounds the probability that any of l0 keys at distance d from instability
                 // crosses it, as the code intends: P[Z > d] per key
                 let s = to_f64(scale);
                 if (1e-300..1e300).contains(&s) {
@@ -468,7 +471,7 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
                         intended
                     );
                 }
-                // C1/C2: monotone in each of l0, l1 and l∞
+                // C: monotone in each of l0, l1 and l∞
                 for bumped in bump::<T>(d_in) {
                     if let Ok((e2, delta2)) = m.map(&bumped) {
                         prop_assert!(
@@ -487,7 +490,7 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
     for x in [&case.data, &case.other] {
         let out = ok(m.invoke(x))?;
         for (key, released) in &out {
-            // B1: released keys come from the input
+            // B: released keys come from the input
             let original = x.get(key);
             prop_assert!(
                 original.is_some(),
@@ -498,14 +501,14 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
             if released.is_nan() {
                 return Err(TestCaseError::fail(format!("released NaN for {key}")));
             }
-            // B3: released values are on the grid (or saturated), so releasing them again is the identity
+            // B: released values are on the grid (or saturated), so releasing them again is the identity
             prop_assert!(
                 released.exact().is_none() || T::release(&released.shift(k), k).same(released),
                 "released {:?} isn't on the grid 2^{}",
                 released,
                 k
             );
-            // B2: released values pass the (rounded) threshold, and integer saturation never wraps
+            // B: released values pass the (rounded) threshold, and integer saturation never wraps
             let threshold_value = T::release(&t_int, k);
             let ok_side = if case.threshold.keeps_below() {
                 released.exact() <= threshold_value.exact()
@@ -520,13 +523,13 @@ fn check<T: ThresholdAtom>(case: Case<T>) -> TestResult {
                 released,
                 case.threshold
             );
-            // B1: without noise, the release is the input on the grid
+            // B: without noise, the release is the input on the grid
             if case.scale == 0.0 {
                 prop_assert!(T::release(&original.shift(k), k).same(released));
             }
         }
         if case.scale == 0.0 {
-            // B1: without noise, exactly the passing keys are released
+            // B: without noise, exactly the passing keys are released
             let expected = x
                 .iter()
                 .filter(|(_, v)| passes(&v.shift(k), &t_int))
@@ -566,7 +569,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------------------------
-// C3/C4: exact divergence on single-key neighbors
+// C: exact divergence on single-key neighbors
 // ---------------------------------------------------------------------------------------------
 
 fn i64_threshold(scale: f64, threshold: i64) -> Meas<i64, f64> {
@@ -574,7 +577,7 @@ fn i64_threshold(scale: f64, threshold: i64) -> Meas<i64, f64> {
 }
 
 proptest! {
-    // C3: for a key present in both maps, at counts v and w, the exact divergence between
+    // C: for a key present in both maps, at counts v and w, the exact divergence between
     // their outputs is within the claimed (ε, δ), in both directions
     #[test]
     fn prop_single_key_divergence(
@@ -636,7 +639,7 @@ fn test_finding_delta_off_by_one() -> Fallible<()> {
     Ok(())
 }
 
-// FINDING (F1), C4: l0 keys at the threshold, against the empty map.
+// FINDING (F1), C: l0 keys at the threshold, against the empty map.
 // The map's formula is otherwise exact: correcting the tail argument by one recovers the requirement.
 #[test]
 fn test_finding_several_absent_keys() -> Fallible<()> {
@@ -661,7 +664,7 @@ fn test_finding_several_absent_keys() -> Fallible<()> {
 /// The number of samples per statistical test. Each check fails spuriously with probability at most 1e-6.
 const SAMPLES: usize = 20_000;
 
-// D1: released values far above the threshold are the count plus discrete Laplace noise,
+// D: released values far above the threshold are the count plus discrete Laplace noise,
 // for integers and for floats in units of 2^k
 #[test]
 fn test_threshold_noise_distribution() -> Fallible<()> {
@@ -682,7 +685,7 @@ fn test_threshold_noise_distribution() -> Fallible<()> {
     check_chi_square_from_probs(&histogram(&noise, w), &probs)
 }
 
-// D2: a key with count v is released with probability P[Z ≥ T - v], not P[Z > T - v]
+// D: a key with count v is released with probability P[Z ≥ T - v], not P[Z > T - v]
 #[test]
 fn test_threshold_release_probability() -> Fallible<()> {
     let (scale, threshold) = (2.0, 5);
@@ -699,7 +702,7 @@ fn test_threshold_release_probability() -> Fallible<()> {
     Ok(())
 }
 
-// D3: keys are released independently
+// D: keys are released independently
 #[test]
 fn test_threshold_keys_independent() -> Fallible<()> {
     let (scale, threshold) = (2.0, 5);
@@ -719,7 +722,7 @@ fn test_threshold_keys_independent() -> Fallible<()> {
 // E. Large maps, extreme values, distances and scales
 // ---------------------------------------------------------------------------------------------
 
-// E1: a map with 100,000 keys: every released key passes, and the map handles l0 = 100,000
+// E: a map with 100,000 keys: every released key passes, and the map handles l0 = 100,000
 #[test]
 fn test_threshold_large_map() -> Fallible<()> {
     let start = std::time::Instant::now();
@@ -740,7 +743,7 @@ fn test_threshold_large_map() -> Fallible<()> {
     Ok(())
 }
 
-// E2: counts near the limits of the type saturate rather than wrap,
+// E: counts near the limits of the type saturate rather than wrap,
 // and thresholds at the limits convert exactly
 #[test]
 fn test_threshold_saturation() -> Fallible<()> {
@@ -778,7 +781,7 @@ fn test_threshold_saturation() -> Fallible<()> {
     Ok(())
 }
 
-// E3: huge l0 and l1 keep δ a probability, and never panic
+// E: huge l0 and l1 keep δ a probability, and never panic
 #[test]
 fn test_threshold_huge_distances() -> Fallible<()> {
     let m = i64_threshold(1.0, 1_000);
@@ -797,7 +800,7 @@ fn test_threshold_huge_distances() -> Fallible<()> {
     Ok(())
 }
 
-// E4: scale extremes: no noise gives (∞, 1); tiny and huge scales give a valid map or an error
+// E: scale extremes: no noise gives (∞, 1); tiny and huge scales give a valid map or an error
 #[test]
 fn test_threshold_scale_extremes() -> Fallible<()> {
     let m = i64_threshold(0.0, 10);
@@ -817,7 +820,7 @@ fn test_threshold_scale_extremes() -> Fallible<()> {
     Ok(())
 }
 
-// E5: float values at the edges of the type, at the smallest and a large granularity
+// E: float values at the edges of the type, at the smallest and a large granularity
 #[test]
 fn test_threshold_float_extremes() -> Fallible<()> {
     let x = HashMap::from([(0u32, f64::MAX), (1, f64::from_bits(1)), (2, -f64::MAX)]);

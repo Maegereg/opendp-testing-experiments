@@ -48,7 +48,7 @@ from hypothesis import assume, event, given, settings, strategies as st  # noqa:
 
 import opendp.prelude as dp  # noqa: E402
 
-from _props import (  # noqa: E402
+from test.polars._props import (  # noqa: E402
     COLUMN_FILLS,
     FILL_STRATEGIES,
     I64_MAX,
@@ -166,7 +166,7 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
     lf = to_lazyframe([])
     plan = _plan(lf, target, fill)
 
-    # A1: accepted exactly for supported, non-categorical targets and non-null, row-wise fills
+    # A: accepted exactly for supported, non-categorical targets and non-null, row-wise fills
     t = _stable(domain, plan)
     expected = _expect_accepted(target, fill)
     assert (t is not None) == expected, (
@@ -177,7 +177,7 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
     if fill.undeclared_nulls:
         event("FINDING: nullable cast fill accepted")
 
-    # A2: the output column is declared non-null and unbounded; other columns are unchanged
+    # A: the output column is declared non-null and unbounded; other columns are unchanged
     series, declared = _declared(t.output_domain, target.name)
     assert not series.nullable
     assert not _has_bounds(series.element_domain)
@@ -187,7 +187,7 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
                 domain.get_series_domain(name)
             )
 
-    # A3: the declared dtype is Polars' dtype
+    # A: the declared dtype is Polars' dtype
     actual = _dtype(plan, target.name)
     if actual is None:
         # FINDING: Polars can't fill a boolean with a number, but OpenDP accepts it
@@ -199,7 +199,7 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
     else:
         assert declared == actual
 
-    # A4: the declared column admits NaN if the target or fill may be NaN
+    # A: the declared column admits NaN if the target or fill may be NaN
     if actual is not None and actual.is_float() and target.nan:
         assert series.element_domain.nan
     if _nan_finding(target, fill, actual) and declared == actual:
@@ -207,7 +207,7 @@ def test_polars_fill_null_construction(target: Target, fill: Fill, margins):
         event("FINDING: NaN fill not declared")
         assert not series.element_domain.nan
 
-    # A5: margins are unchanged, except those grouping by the filled column, which can merge
+    # A: margins are unchanged, except those grouping by the filled column, which can merge
     # groups: they're dropped, and what remains is only what the other margins imply
     def describe(d, by):
         m = d.get_margin(by)
@@ -243,13 +243,13 @@ def test_polars_fill_null_matches_polars(data, target: Target, fill: Fill):
             t(lf).collect()
         return
 
-    # B1: exactly the frame Polars computes, row by row
+    # B: exactly the frame Polars computes, row by row
     out = t(lf)
     assert [row_key(r) for r in frame_rows(out)] == [
         row_key(r) for r in frame_rows(plan)
     ]
 
-    # B2: no nulls remain, nulls become the fill, and other values are unchanged
+    # B: no nulls remain, nulls become the fill, and other values are unchanged
     # (after Polars' coercion to the common type)
     filled = out.collect()[target.name]
     assert filled.null_count() == 0
@@ -267,7 +267,7 @@ def test_polars_fill_null_matches_polars(data, target: Target, fill: Fill):
         else "some filled"
     )
 
-    # B3: the output is a member of the output domain, unless a pinned finding applies
+    # B: the output is a member of the output domain, unless a pinned finding applies
     coerced = _coerced(lf, target, fill)
     nan_added = (
         _nan_finding(target, fill, actual)
@@ -304,7 +304,7 @@ def test_polars_fill_null_private_release_matches_polars(data, fill: Fill):
     lf = to_lazyframe(data)
     i = pl.col("i").fill_null(fill.expr)
 
-    # B4: aggregates of filled columns, released with no noise, equal plain Polars
+    # B: aggregates of filled columns, released with no noise, equal plain Polars
     plan = lf.select(
         i.dp.sum((-5, 5)).alias("sum"),
         pl.col("s").fill_null("z").dp.count(signed=True).alias("count"),
@@ -349,7 +349,7 @@ def test_polars_fill_null_in_predicates_and_selects(data, fill: Fill):
     domain, lf = frame_domain(), to_lazyframe(data)
     target = pl.col("i").fill_null(fill.expr)
 
-    # B5: fills compose with filters and selects, and compute exactly what Polars computes
+    # B: fills compose with filters and selects, and compute exactly what Polars computes
     for plan in [
         lf.filter(target.cast(pl.Float64, strict=False).fill_null(0.0) > 0),
         lf.select(target.alias("x"), pl.col("k")),
@@ -380,11 +380,11 @@ def test_polars_fill_null_stability(data, target: Target, fill: Fill, d, seed):
     if t is None or _dtype(plan, target.name) is None:
         return
 
-    # C1: filling doesn't change the stability map
+    # C: filling doesn't change the stability map
     t_identity = dp.t.make_stable_lazyframe(domain, dp.symmetric_distance(), lf)
     assert t.map(d) == t_identity.map(d)
 
-    # C2: filled neighbors are no further apart than the neighbors themselves
+    # C: filled neighbors are no further apart than the neighbors themselves
     other, k = seed.draw(neighbors(data))
     event(f"neighbor distance {k}")
     out = frame_rows(t(lf))
@@ -442,7 +442,7 @@ def test_polars_fill_null_sum_sensitivity(data, target: Target, fill: Fill, comp
         column = list(SCHEMA).index(target.name)
         data = [row for row in data if row[column] is not None]
 
-    # D1: adding a row whose target is null moves the sum by at most the clipping bound, 5
+    # D: adding a row whose target is null moves the sum by at most the clipping bound, 5
     def release(rows):
         return m(to_lazyframe(rows)).collect().item()
 
@@ -467,7 +467,7 @@ def test_polars_fill_null_sum_sensitivity(data, target: Target, fill: Fill, comp
 def test_polars_fill_null_keeps_invariants(fill: Fill):
     lf = to_lazyframe([])
 
-    # D2: filling a non-grouping column keeps the frame length public
+    # D: filling a non-grouping column keeps the frame length public
     lengths = frame_domain([Margin(by=[], invariant="lengths", max_length=100)])
     plan = _plan(lf, Target(pl.col("i"), "i"), fill).select(dp.len(signed=True))
     assert zero_noise(lengths, plan).map(1) == 0.0
@@ -543,7 +543,7 @@ def test_polars_fill_null_grouped_losses(fill: Fill, pred, bounds, invariant):
         except dp.OpenDPException:
             return math.inf
 
-    # D3: filling before or after an expression filter costs the same
+    # D: filling before or after an expression filter costs the same
     for name, make in [
         ("sum", lambda c: c.clip(*bounds).sum().dp.noise(scale=1.0)),
         ("dp.sum", lambda c: c.dp.sum(bounds, scale=1.0)),
@@ -625,7 +625,7 @@ def test_polars_fill_null_filtered_sum_sensitivity(
         new = seed.draw(rows())
         other[j] = new[:3] + (data[j][3],) + new[4:]
 
-    # D5: the sums move by at most the sensitivity, which is the loss at noise scale 1
+    # D: the sums move by at most the sensitivity, which is the loss at noise scale 1
     def private(scale, **kwargs):
         plan = (
             to_lazyframe([])
@@ -674,7 +674,7 @@ def test_polars_fill_null_noise_scales(fill: Fill, contributions):
     def scales(query):
         return query.summarize()["scale"].to_list()
 
-    # D4: an explicit fill costs the same as dp.sum's own imputation
+    # D: an explicit fill costs the same as dp.sum's own imputation
     explicit = context.query().with_columns(pl.col("i").fill_null(fill.expr))
     assert scales(explicit.select(pl.col("i").dp.sum((-5, 5)))) == scales(
         context.query().select(pl.col("i").dp.sum((-5, 5)))
@@ -703,12 +703,12 @@ def test_polars_fill_null_context(data, fill: Fill, epsilon, contributions):
     )
     filled = context.query().with_columns(pl.col("i").fill_null(fill.expr))
 
-    # E2: the plan built by the context never carries the data
+    # E: the plan built by the context never carries the data
     assert object.__getattribute__(filled, "polars_plan").collect().height == 0
 
     query = filled.select(dp.len(signed=True), pl.col("i").clip(-5, 5).sum().dp.noise())
 
-    # E1: the resolved measurement fits within this query's share of the budget,
+    # E: the resolved measurement fits within this query's share of the budget,
     # and releasing it spends exactly that share
     assert query.resolve().map(contributions) <= epsilon / 2
     released = query.release().collect()

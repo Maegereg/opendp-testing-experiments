@@ -1,5 +1,5 @@
-//! Shared helpers for property tests of noise-adding measurements,
-//! such as `make_laplace` and `make_gaussian`.
+//! Shared helpers for property tests of noise-adding measurements (`make_laplace` and
+//! `make_laplace_threshold`), written generically so that suites for other mechanisms can reuse them.
 //!
 //! Every such mechanism maps each input value `x` to an integer index `z`
 //! (the multiple `z * 2^k` of the granularity `2^k` nearest to `x`, or `x` itself for integers),
@@ -378,7 +378,6 @@ pub(crate) fn histogram(noise: &[IBig], w: i64) -> Vec<u64> {
     counts
 }
 
-#[cfg(test)]
 mod test {
     use super::*;
 

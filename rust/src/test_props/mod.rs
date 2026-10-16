@@ -11,6 +11,14 @@
 //!
 //! References are always computed in `IBig`/`RBig`, never in the atomic type,
 //! so that overflow or rounding in the atomic type can't hide a failure.
+//!
+//! Statistical tests (labelled D in the suites) run on fixed parameter grids, not on proptest
+//! cases, and use the library's `check_chi_square` at significance 1e-6, as its sampler tests do.
+//! The noise can't be seeded, so each such check fails spuriously with probability 1e-6.
+//!
+//! Proptest saves failing seeds under `proptest-regressions/` and replays them for every test
+//! in that file. Commit a regression file when it records a real failure; delete files left
+//! behind by experiments such as mutation runs, which would fail on unrelated tests.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -324,17 +332,30 @@ pub(crate) fn check_row_wise<T, U>(
     Ok(())
 }
 
+/// Set in the child processes started by [`run_ignored_test`].
+const PROBE_CHILD_ENV: &str = "OPENDP_PROBE_CHILD";
+
+/// Whether this process is a child started by [`run_ignored_test`].
+///
+/// Probes that abort or hang the process return early unless this holds,
+/// so that running ignored tests directly (`cargo test -- --ignored`) is still safe.
+pub(crate) fn in_probe_child() -> bool {
+    std::env::var_os(PROBE_CHILD_ENV).is_some()
+}
+
 /// Runs the ignored test `name` (its full path) in a child process of this test binary.
 /// Returns its exit status and stderr, or `None` if it was still running after `timeout`,
 /// in which case it is killed.
 ///
 /// For probes that abort or hang the process, which can't be observed in-process.
+/// The probe should return early unless [`in_probe_child`] holds.
 pub(crate) fn run_ignored_test(
     name: &str,
     timeout: std::time::Duration,
 ) -> Option<(std::process::ExitStatus, String)> {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", name])
+        .env(PROBE_CHILD_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -469,7 +490,8 @@ macro_rules! impl_prop_int {
     ($($ty:ty)+) => {$(
         impl PropInt for $ty {
             fn range(l: Self, u: Self) -> BoxedStrategy<Self> {
-                // proptest 1.11 computes `end - 1` for signed ranges, which overflows for `MIN..=MIN`
+                // proptest (1.11, the locked version) computes `end - 1` for signed ranges,
+                // which overflows for `MIN..=MIN`
                 if l == u {
                     return Just(l).boxed();
                 }
@@ -854,7 +876,6 @@ macro_rules! for_each_float {
 }
 pub(crate) use for_each_float;
 
-#[cfg(test)]
 mod test {
     use super::*;
 

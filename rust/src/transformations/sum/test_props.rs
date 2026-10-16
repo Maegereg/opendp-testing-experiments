@@ -120,7 +120,7 @@ where
     let mut domain = VectorDomain::new(ok(AtomDomain::new_closed(case.bounds))?);
     domain.size = size;
 
-    // A1/A5: never panics, and only fails when the sensitivity can't be represented in T
+    // A: never panics, and only fails when the sensitivity can't be represented in T
     let must_fail = if case.sized {
         range > max
     } else {
@@ -135,12 +135,12 @@ where
     };
     prop_assert!(!must_fail, "constructor should have failed");
 
-    // A3: input space is preserved, output domain is all of T
+    // A: input space is preserved, output domain is all of T
     prop_assert!(t.input_domain == domain);
     prop_assert!(t.input_metric == metric);
     prop_assert!(t.output_domain == AtomDomain::default());
 
-    // B1: when the sum can't overflow, it is exact. Also check the overflow predicate itself
+    // B: when the sum can't overflow, it is exact. Also check the overflow predicate itself
     let y = big(ok(t.invoke(&case.data))?);
     let exact = case.data.iter().fold(IBig::ZERO, |s, v| s + big(*v));
     if let Some(n) = size
@@ -153,7 +153,7 @@ where
         prop_assert_eq!(&y, &exact);
     }
 
-    // B2-B4: agrees with the saturating reference
+    // B: agrees with the saturating reference
     let expected = if ordered {
         fold_ref(&case.data)
     } else {
@@ -161,12 +161,12 @@ where
     };
     prop_assert_eq!(&y, &expected);
 
-    // B8: under an unordered metric, the result can't depend on order
+    // B: under an unordered metric, the result can't depend on order
     if !ordered {
         prop_assert_eq!(&big(ok(t.invoke(&case.permuted))?), &y);
     }
 
-    // C2/C4/C5: the map equals the ideal sensitivity exactly, or fails because it isn't representable
+    // C: the map equals the ideal sensitivity exactly, or fails because it isn't representable
     let ideal = |d: IntDistance| {
         let d = if case.sized { d / 2 } else { d };
         (
@@ -184,7 +184,7 @@ where
         }
     }
 
-    // C1: stability. Neighbors at distance at most k differ by at most map(k)
+    // C: stability. Neighbors at distance at most k differ by at most map(k)
     if k > 0 {
         let y2 = big(ok(t.invoke(&x2))?);
         if let Ok(d_out) = t.map(&k) {
@@ -278,9 +278,21 @@ where
     let mut domain = VectorDomain::new(element_domain);
     domain.size = size;
 
-    // A1: never panics
-    let Ok(t) = make_sum(domain.clone(), metric.clone()) else {
-        return Ok(());
+    // A: never panics, and accepts modest finite bounds: with |bounds| <= 2^20 and at most
+    // DEFAULT_SIZE_LIMIT records, neither the sum nor its rounding allowance can overflow,
+    // so a rejection would be spurious. Size 0 is excluded: it's rejected
+    // (`test_finding_float_sum_rejects_size_zero`)
+    let limit = RBig::from(1u32 << 20);
+    let modest = matches!(
+        (rat(l), rat(u)),
+        (Some(lr), Some(ur)) if -limit.clone() <= lr && ur <= limit
+    ) && size.is_none_or(|n| 0 < n && n <= DEFAULT_SIZE_LIMIT);
+    let t = match make_sum(domain.clone(), metric.clone()) {
+        Ok(t) => t,
+        Err(e) => {
+            prop_assert!(!modest, "unexpected constructor error: {e:?}");
+            return Ok(());
+        }
     };
     // the constructor can only succeed if the bounds are finite
     let (Some(lr), Some(ur)) = (rat(l), rat(u)) else {
@@ -289,7 +301,7 @@ where
         ));
     };
 
-    // A3: input space is preserved, output domain excludes NaN
+    // A: input space is preserved, output domain excludes NaN
     prop_assert!(t.input_domain == domain);
     prop_assert!(t.input_metric == metric);
     prop_assert!(t.output_domain == AtomDomain::new_non_nan());
@@ -302,7 +314,7 @@ where
     let relaxation = ok(Pairwise::<T>::relaxation(n_eff, l, u))?;
     let relaxation_r = rat(relaxation).unwrap();
 
-    // B5/B6/B9: output is finite (so in the output domain), and accurate when no overflow is possible
+    // B: output is finite (so in the output domain), and accurate when no overflow is possible
     let y = ok(t.invoke(&case.data))?;
     prop_assert!(num::Float::is_finite(y), "non-finite output {:?}", y);
     let exact = case
@@ -319,13 +331,13 @@ where
         );
     }
 
-    // B8: under an unordered metric, reordering changes the result by at most the relaxation
+    // B: under an unordered metric, reordering changes the result by at most the relaxation
     if !ordered && !can_overflow {
         let y_perm = ok(t.invoke(&case.permuted))?;
         prop_assert!(abs_rat(rat(y_perm).unwrap() - rat(y).unwrap()) <= relaxation_r.clone());
     }
 
-    // C2-C5: the map is non-negative, monotone, and covers the ideal sensitivity plus relaxation
+    // C: the map is non-negative, monotone, and covers the ideal sensitivity plus relaxation
     let range = ur.clone() - lr.clone();
     let mag = abs_rat(lr).max(abs_rat(ur));
     let (x2, k) = neighbor(&case.data, &case.edits, case.sized, ordered);
@@ -354,7 +366,7 @@ where
     }
 
     if randomized {
-        // C7: the shuffle has stability 1, so the map must be that of the inner ordered sum
+        // C: the shuffle has stability 1, so the map must be that of the inner ordered sum
         let inner = ok(match size {
             Some(n) => make_sized_bounded_float_ordered_sum::<Pairwise<T>>(n, case.bounds),
             None => make_bounded_float_ordered_sum::<Pairwise<T>>(DEFAULT_SIZE_LIMIT, case.bounds),
@@ -369,7 +381,7 @@ where
         return Ok(());
     }
 
-    // C1: stability. Neighbors at distance at most k differ by at most map(k)
+    // C: stability. Neighbors at distance at most k differ by at most map(k)
     if k > 0 {
         let y2 = ok(t.invoke(&x2))?;
         prop_assert!(num::Float::is_finite(y2));
@@ -389,7 +401,7 @@ where
 for_each_float!(floats, float_case, check_float);
 
 proptest! {
-    /// C7: when the dataset exceeds `size_limit`, a random subset of `size_limit` records is summed.
+    /// B: when the dataset exceeds `size_limit`, a random subset of `size_limit` records is summed.
     /// The output must be within the range of any such subset sum, up to rounding error.
     #[test]
     fn prop_float_checked_sum_truncation(
@@ -432,7 +444,7 @@ where
 
 #[test]
 fn test_sum_requires_closed_bounds() -> Fallible<()> {
-    // A2: unbounded and half-open domains are rejected
+    // A: unbounded and half-open domains are rejected
     let unbounded = VectorDomain::new(AtomDomain::<i32>::default());
     assert!(make_sum(unbounded, SymmetricDistance).is_err());
     let unbounded = VectorDomain::new(AtomDomain::<f64>::new_non_nan());
@@ -488,6 +500,32 @@ fn test_sum_int_branches() -> Fallible<()> {
     let t = sum((-1i8, 100), None, InsertDeleteDistance)?;
     assert_eq!(t.invoke(&vec![100, 100, -1])?, 126);
     assert_eq!(t.map(&1)?, 100);
+    Ok(())
+}
+
+// FINDING: a sized float sum over 0 records is rejected with an overflow error, because the
+// pairwise overflow check divides by the size (`max_ulp.neg_inf_div(&size_)`).
+// Integer sums accept size 0.
+#[test]
+fn test_finding_float_sum_rejects_size_zero() -> Fallible<()> {
+    for metric_ordered in [false, true] {
+        let err = if metric_ordered {
+            sum((0f64, 1.), Some(0), InsertDeleteDistance).map(|_| ())
+        } else {
+            sum((0f64, 1.), Some(0), SymmetricDistance).map(|_| ())
+        }
+        .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("neg_inf_div(0)"),
+            "unexpected error: {err:?}"
+        );
+    }
+    assert!(sum((0f32, 1.), Some(0), SymmetricDistance).is_err());
+    assert!(sum((0f64, 1.), Some(1), SymmetricDistance).is_ok());
+    assert_eq!(
+        sum((0i32, 1), Some(0), SymmetricDistance)?.invoke(&vec![])?,
+        0
+    );
     Ok(())
 }
 

@@ -191,7 +191,8 @@ pub mod traits;
 pub mod transformations;
 pub mod utilities;
 
-#[cfg(test)]
+// shared helpers for the property-based test suites, which all test contrib components
+#[cfg(all(test, feature = "contrib"))]
 pub(crate) mod test_props;
 
 #[cfg(all(feature = "polars", feature = "contrib"))]

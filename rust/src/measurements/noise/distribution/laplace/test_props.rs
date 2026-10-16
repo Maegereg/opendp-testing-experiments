@@ -111,7 +111,7 @@ struct Mechanism<T, Q> {
     map: Box<dyn Fn(&Q) -> Fallible<f64>>,
 }
 
-/// A1/A2: constructs the measurement for `case`, checking that construction succeeds
+/// A: constructs the measurement for `case`, checking that construction succeeds
 /// exactly when the arguments are valid, and that the input space is preserved.
 fn build<T: NoiseAtom, Q: PropDistance>(
     case: &Case<T, Q>,
@@ -186,7 +186,7 @@ where
     };
     let rounding = (pow2(k) - pow2(T::k_min())) * RBig::from(n);
 
-    // B1/B2: the map is exactly (d + rounding) / scale, rounded up, and rejects invalid distances.
+    // B: the map is exactly (d + rounding) / scale, rounded up, and rejects invalid distances.
     // FINDING: negativity is checked after adding the rounding allowance,
     // so a negative `d` with `|d| <= rounding` is accepted (see test_laplace_negative_distance).
     let check_map = |d: &Q| -> TestResult {
@@ -218,7 +218,7 @@ where
         check_map(d)?;
     }
 
-    // B4: the map bounds the true privacy loss between the two datasets,
+    // B: the map bounds the true privacy loss between the two datasets,
     // for every distance at least as large as their exact distance
     let z = case.data.iter().map(|x| x.shift(k)).collect::<Vec<_>>();
     let z2 = case.other.iter().map(|x| x.shift(k)).collect::<Vec<_>>();
@@ -249,13 +249,13 @@ where
         }
     }
 
-    // C1: the release has one value per input
+    // C: the release has one value per input
     let out = ok((m.invoke)(&case.data))?;
     prop_assert_eq!(out.len(), case.data.len());
 
     let bound = RBig::from(60) * &scale + pow2(k);
     for ((x, z), y) in case.data.iter().zip(&z).zip(&out) {
-        // C2: without noise, the release is the input rounded to the granularity
+        // C: without noise, the release is the input rounded to the granularity
         if scale == RBig::ZERO {
             let expected = T::release(z, k);
             prop_assert!(
@@ -267,7 +267,7 @@ where
             );
         }
 
-        // C3: never NaN, and always a multiple of 2^k
+        // C: never NaN, and always a multiple of 2^k
         prop_assert!(!y.is_nan(), "{:?} released as NaN", x);
         if let Some(e) = y.exact() {
             prop_assert!(
@@ -279,7 +279,7 @@ where
             );
         }
 
-        // C4/C5: the noise is within 60 scales, except with probability below e^-59,
+        // C: the noise is within 60 scales, except with probability below e^-59,
         // so saturation can't wrap and the noise can't be in the wrong units
         let center = mul_2k(&RBig::from(z.clone()), k);
         prop_assert!(
@@ -379,7 +379,7 @@ fn noise_indices<T: NoiseAtom>(
 const STAT_SCALES: [f64; 3] = [0.5, 1.7, 4.3];
 const STAT_SHIFTS: [i64; 2] = [-3, (1 << 40) + 1];
 
-// D1/D3: integer noise is discrete Laplace(scale), whether the input is near zero or large
+// D: integer noise is discrete Laplace(scale), whether the input is near zero or large
 #[test]
 fn test_integer_noise_distribution() -> Fallible<()> {
     for scale in STAT_SCALES {
@@ -395,7 +395,7 @@ fn test_integer_noise_distribution() -> Fallible<()> {
     Ok(())
 }
 
-// D2/D3: float noise at a coarse granularity is discrete Laplace(scale / 2^k) on multiples of 2^k
+// D: float noise at a coarse granularity is discrete Laplace(scale / 2^k) on multiples of 2^k
 #[test]
 fn test_float_noise_distribution() -> Fallible<()> {
     for (index_scale, k) in STAT_SCALES.into_iter().zip([-4, 0, 2]) {

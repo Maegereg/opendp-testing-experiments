@@ -1,8 +1,25 @@
 import pytest
 import doctest
+import os
 import re
 
 import opendp.prelude as dp
+
+try:
+    from hypothesis import HealthCheck, settings
+except ImportError:  # only the property-based suites need hypothesis
+    pass
+else:
+    # Profiles for the property-based suites (test/**/test_*_props.py):
+    # "opendp" by default, and "stress" with HYPOTHESIS_PROFILE=stress.
+    for _name, _examples in [("opendp", 100), ("stress", 2000)]:
+        settings.register_profile(
+            _name,
+            deadline=None,  # FFI calls have unpredictable latency
+            max_examples=_examples,
+            suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+        )
+    settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "opendp"))
 
 
 @pytest.fixture(autouse=True)
