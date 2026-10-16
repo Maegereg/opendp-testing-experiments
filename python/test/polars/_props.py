@@ -29,6 +29,7 @@ import opendp.prelude as dp  # noqa: E402
 # registers and loads the hypothesis profiles, and provides exact row comparison
 from test._props_common import (  # noqa: E402, F401
     Row,
+    row_key,
     row_multiset,
     symmetric_distance,
     value_key,
@@ -47,6 +48,7 @@ SCHEMA = {
     "s": pl.String,  # nullable, few categories
     "k": pl.Int64,  # non-null grouping key
     "flag": pl.Boolean,  # nullable
+    "g": pl.Float64,  # nullable, may be NaN
 }
 
 
@@ -59,6 +61,7 @@ def frame_domain(margins: Sequence[Any] = ()):
             dp.series_domain("s", dp.option_domain(dp.atom_domain(T="String"))),
             dp.series_domain("k", dp.atom_domain(T="i64")),
             dp.series_domain("flag", dp.option_domain(dp.atom_domain(T=bool))),
+            dp.series_domain("g", dp.option_domain(dp.atom_domain(T="f64", nan=True))),
         ]
     )
     for margin in margins:
@@ -78,6 +81,7 @@ def rows() -> st.SearchStrategy[Row]:
         st.none() | st.sampled_from(["a", "b", "c"]),
         st.integers(0, 2),
         st.none() | st.booleans(),
+        st.none() | floats | st.just(math.nan),
     )
 
 
@@ -295,3 +299,176 @@ def zero_noise(domain, plan, measure=None, threshold=None):
         global_scale=0.0,
         threshold=threshold,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Shared suite plumbing
+# ---------------------------------------------------------------------------------------------
+
+
+def build(make):
+    """Calls ``make``, returning ``None`` if OpenDP rejects it."""
+    try:
+        return make()
+    except dp.OpenDPException:
+        return None
+
+
+def margin_lists():
+    """Margins over groupings of the frame, with random descriptors."""
+    by = st.sampled_from([(), ("k",), ("s",), ("k", "s")])
+    margin = st.builds(
+        lambda by, max_length, max_groups, invariant: dp.polars.Margin(
+            by=[pl.col(c) for c in by],
+            max_length=max_length,
+            max_groups=max_groups,
+            invariant=invariant,
+        ),
+        by,
+        st.none() | st.integers(1, 50),
+        st.none() | st.integers(1, 5),
+        st.sampled_from([None, "keys", "lengths"]),
+    )
+    return st.lists(margin, max_size=3, unique_by=lambda m: tuple(map(str, m.by)))
+
+
+# ---------------------------------------------------------------------------------------------
+# Imputation: expressions to fill, and fill values
+# ---------------------------------------------------------------------------------------------
+
+#: The fill is null, or may be.
+NULLABLE = "nullable"
+#: The filled data is categorical.
+CATEGORICAL = "categorical"
+
+
+@dataclass(frozen=True)
+class Target:
+    """A row-wise expression whose nulls are filled, named after its column ``name``.
+
+    ``nan`` is whether its values may be NaN, and ``kind`` whether OpenDP should accept filling it.
+    """
+
+    expr: Any
+    name: str
+    nan: bool = False
+    kind: str = OK
+
+    def __repr__(self) -> str:
+        return f"Target({self.expr})"
+
+
+@dataclass(frozen=True)
+class Fill:
+    """A fill value or expression, labeled with how OpenDP should treat it,
+    and with whether its values may be NaN."""
+
+    expr: Any
+    kind: str = OK
+    nan: bool = False
+    #: OpenDP wrongly declares this nullable fill non-null, and accepts it (a pinned finding).
+    undeclared_nulls: bool = False
+
+    @property
+    def accepted(self) -> bool:
+        return self.kind == OK
+
+    def __repr__(self) -> str:
+        return f"Fill({self.expr}, {self.kind})"
+
+
+I64_MIN, I64_MAX = -(2**63), 2**63 - 1
+
+_i, _f, _s, _k = pl.col("i"), pl.col("f"), pl.col("s"), pl.col("k")
+
+#: Expressions to fill: every column, and row-wise expressions that add nulls, bounds or NaN.
+TARGETS = [
+    Target(_i, "i"),
+    Target(_f, "f"),
+    Target(pl.col("g"), "g", nan=True),
+    Target(_s, "s"),
+    Target(_k, "k"),
+    Target(pl.col("flag"), "flag"),
+    Target(_i + 1, "i"),
+    # failed casts are null
+    Target(_s.cast(pl.Int64, strict=False), "s"),
+    # bounded
+    Target(_i.clip(0, 4), "i"),
+    # division by zero is NaN or infinite
+    Target(_f / 0, "f", nan=True),
+    Target(_s.cast(pl.Categorical), "s", kind=CATEGORICAL),
+]
+
+#: Scalar literals of every type, including edge values and NaN.
+LITERAL_FILLS = [
+    Fill(v)
+    for v in [
+        0,
+        -1,
+        7,
+        I64_MIN,
+        I64_MAX,
+        0.5,
+        -0.0,
+        math.inf,
+        -math.inf,
+        1e308,
+        "z",
+        True,
+    ]
+] + [
+    Fill(math.nan, nan=True),
+    Fill(pl.lit(3, dtype=pl.Int32)),
+    Fill(pl.lit(2.5, dtype=pl.Float32)),
+]
+
+#: Non-null row-wise expressions.
+COLUMN_FILLS = [
+    Fill(_k),
+    Fill(_k + 1),
+    Fill(_k.cast(pl.Float64)),
+    Fill(_i.fill_null(0)),
+    Fill(_f.fill_null(0.0)),
+    Fill(pl.col("g").fill_null(0.0), nan=True),
+    Fill(_s.fill_null("z")),
+    Fill(pl.col("flag").fill_null(False)),
+]
+
+#: Fills OpenDP should reject.
+REJECTED_FILLS = [Fill(pl.col(c), NULLABLE) for c in ["i", "f", "g", "s", "flag"]] + [
+    Fill(pl.lit(None), NULLABLE),
+    Fill(pl.lit(None, dtype=pl.Int64), NULLABLE),
+    # failed casts are null
+    Fill(
+        _s.fill_null("z").cast(pl.Int64, strict=False), NULLABLE, undeclared_nulls=True
+    ),
+    # a series literal doesn't broadcast
+    Fill(pl.lit(pl.Series([1, 2])), UNSUPPORTED),
+    Fill(_k.sum(), NON_ROW_WISE),
+    Fill(_k.mean(), NON_ROW_WISE),
+    Fill(pl.len(), NON_ROW_WISE),
+    Fill(_k.shift(1), NON_ROW_WISE),
+    Fill(_k.filter(_k > 0), NON_ROW_WISE),
+    Fill(_k.cum_sum(), NON_ROW_WISE),
+]
+
+
+def fill_targets() -> st.SearchStrategy[Target]:
+    """Targets, with the grouping columns of :func:`margin_lists`,
+    and the float column declared as not NaN, drawn more often."""
+    common = [t for t in TARGETS[:5] if t.name in ("k", "s", "f")]
+    return st.sampled_from(TARGETS) | st.sampled_from(common)
+
+
+def fills(accepted_only: bool = False) -> st.SearchStrategy[Fill]:
+    """Fill values and expressions. With ``accepted_only``, only fills OpenDP should accept."""
+    # fills that may be NaN are rare in the lists, but matter, so they're drawn more often
+    nan = st.sampled_from([f for f in LITERAL_FILLS + COLUMN_FILLS if f.nan])
+    ok = st.one_of(st.sampled_from(LITERAL_FILLS), st.sampled_from(COLUMN_FILLS), nan)
+    if accepted_only:
+        return ok
+    return st.one_of(ok, ok, st.sampled_from(REJECTED_FILLS))
+
+
+#: Fill strategies, which Polars applies with ``fill_null(strategy=...)``. OpenDP rejects them all.
+FILL_STRATEGIES = ["forward", "backward", "min", "max", "mean", "zero", "one"]

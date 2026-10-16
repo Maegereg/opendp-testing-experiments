@@ -31,9 +31,11 @@ import opendp.prelude as dp  # noqa: E402
 from _props import (  # noqa: E402
     Pred,
     accepted_predicates,
+    build,
     datasets,
     frame_domain,
     frame_rows,
+    margin_lists,
     neighbors,
     predicates,
     row_multiset,
@@ -49,14 +51,6 @@ Margin = dp.polars.Margin
 context_settings = settings(max_examples=max(10, settings().max_examples // 5))
 
 
-def _build(make):
-    """Calls ``make``, returning ``None`` if OpenDP rejects it."""
-    try:
-        return make()
-    except dp.OpenDPException:
-        return None
-
-
 def _assert_accepted_as_expected(built, pred: Pred, what: str):
     if pred.accepted:
         assert built is not None, f"{what}: {pred} should be accepted"
@@ -65,37 +59,19 @@ def _assert_accepted_as_expected(built, pred: Pred, what: str):
         pytest.fail(f"{what}: {pred} should be rejected")
 
 
-def _margins():
-    """Margins over groupings of the frame, with random descriptors."""
-    by = st.sampled_from([(), ("k",), ("k", "s")])
-    margin = st.builds(
-        lambda by, max_length, max_groups, invariant: Margin(
-            by=[pl.col(c) for c in by],
-            max_length=max_length,
-            max_groups=max_groups,
-            invariant=invariant,
-        ),
-        by,
-        st.none() | st.integers(1, 50),
-        st.none() | st.integers(1, 5),
-        st.sampled_from([None, "keys", "lengths"]),
-    )
-    return st.lists(margin, max_size=3, unique_by=lambda m: len(m.by))
-
-
 # ---------------------------------------------------------------------------------------------
 # A. Row filter: construction and output space
 # ---------------------------------------------------------------------------------------------
 
 
-@given(pred=predicates(), margins=_margins())
+@given(pred=predicates(), margins=margin_lists())
 def test_polars_filter_construction(pred: Pred, margins):
     event(f"predicate kind: {pred.kind}")
     domain = frame_domain(margins)
     lf = to_lazyframe([])
 
     # A1: accepted exactly when the predicate is supported, boolean and row-wise
-    t = _build(
+    t = build(
         lambda: dp.t.make_stable_lazyframe(
             domain, dp.symmetric_distance(), lf.filter(pred.expr)
         )
@@ -152,7 +128,7 @@ def test_polars_filter_matches_polars(data, pred: Pred):
         .filter(pl.col("k") != 1)
         .select("i", "j", "k")
     )
-    t_composed = _build(
+    t_composed = build(
         lambda: dp.t.make_stable_lazyframe(domain, dp.symmetric_distance(), plan)
     )
     if t_composed is not None:
@@ -197,7 +173,7 @@ def test_polars_filter_private_release_matches_polars(data, pred: Pred):
 )
 def test_polars_filter_stability(data, pred: Pred, d, seed):
     domain, lf = frame_domain(), to_lazyframe(data)
-    t = _build(
+    t = build(
         lambda: dp.t.make_stable_lazyframe(
             domain, dp.symmetric_distance(), lf.filter(pred.expr)
         )
@@ -317,7 +293,7 @@ def test_polars_expr_filter_construction(pred: Pred):
     lf = to_lazyframe([])
 
     # E1: accepted in aggregations exactly when the predicate is supported, boolean and row-wise
-    m = _build(
+    m = build(
         lambda: dp.m.make_private_lazyframe(
             domain,
             dp.symmetric_distance(),
@@ -329,7 +305,7 @@ def test_polars_expr_filter_construction(pred: Pred):
     _assert_accepted_as_expected(m, pred, "expression filter")
 
     # ...and never row-by-row, where it would change the length of the column
-    t = _build(
+    t = build(
         lambda: dp.t.make_stable_lazyframe(
             domain,
             dp.symmetric_distance(),
@@ -458,7 +434,7 @@ def test_polars_filter_context(data, pred: Pred, epsilon, contributions):
 
 
 def test_polars_filter_drops_null_predicate_rows():
-    rows = [(1, None, None, 0, flag) for flag in [True, None, False]]
+    rows = [(1, None, None, 0, flag, None) for flag in [True, None, False]]
     lf = to_lazyframe(rows)
     t = dp.t.make_stable_lazyframe(
         frame_domain(), dp.symmetric_distance(), lf.filter(pl.col("flag"))
@@ -467,7 +443,7 @@ def test_polars_filter_drops_null_predicate_rows():
 
 
 def test_polars_filter_literal_predicates():
-    rows = [(1, None, None, 0, None), (2, 0.5, "a", 1, True)]
+    rows = [(1, None, None, 0, None, None), (2, 0.5, "a", 1, True, 0.0)]
     lf = to_lazyframe(rows)
     domain = frame_domain([Margin(by=[], invariant="lengths")])
     keep_all = dp.t.make_stable_lazyframe(
@@ -499,7 +475,7 @@ def test_polars_filter_rejects_invalid_predicates():
 
 
 def test_polars_expr_filter_keeps_empty_groups():
-    rows = [(1, None, None, 0, None), (2, None, None, 1, None)]
+    rows = [(1, None, None, 0, None, None), (2, None, None, 1, None, None)]
     lf = to_lazyframe(rows)
     domain = frame_domain([Margin(by=[pl.col("k")], invariant="keys", max_length=50)])
     plan = lf.group_by("k").agg(
