@@ -310,6 +310,64 @@ pub(crate) fn discrete_laplace_probs(scale: f64, n: usize) -> (i64, Vec<f64>) {
     (w, probs)
 }
 
+/// `P[Z ≥ d]` for discrete Laplace noise `Z` with the given `scale` (in units of the granularity):
+/// `α^d / (1 + α)` for `d ≥ 0`, where `α = e^{-1/scale}`, and `1 - P[Z ≥ 1 - d]` for `d < 0`.
+///
+/// Computed in `f64`, so it's accurate to a small relative error: compare with a tolerance.
+pub(crate) fn discrete_laplace_tail_ge(scale: f64, d: f64) -> f64 {
+    if d < 0.0 {
+        return 1.0 - discrete_laplace_tail_ge(scale, 1.0 - d);
+    }
+    let a = (-1.0 / scale).exp();
+    let ad = if d == 0.0 { 1.0 } else { (-d / scale).exp() };
+    ad / (1.0 + a)
+}
+
+/// The probability that at least one of `l0` independent events happens, each with probability `p`:
+/// `1 - (1 - p)^l0`, computed without cancellation.
+pub(crate) fn any_of(p: f64, l0: f64) -> f64 {
+    -(l0 * (-p).ln_1p()).exp_m1()
+}
+
+/// Bounds on the hockey-stick divergence `Σ_o max(0, P(o) - e^ε Q(o))` between the outputs of
+/// thresholding one key with discrete Laplace noise, where the key's count is `v` under `P`
+/// and `w` under `Q` (`None` when the key is absent, so never released).
+///
+/// A count `c` is released, with value `c + Z`, when `c + Z ≥ threshold` (which must be at least 0);
+/// otherwise the key is dropped. Outputs are "dropped" and each released value.
+///
+/// Returns `(lower, upper)`: the sum over released values up to a window far into the tail,
+/// and that sum plus the probability under `P` of any released value beyond the window.
+pub(crate) fn single_key_hockey_stick(
+    scale: f64,
+    v: Option<i64>,
+    w: Option<i64>,
+    threshold: i64,
+    eps: f64,
+) -> (f64, f64) {
+    let a = (-1.0 / scale).exp();
+    let pmf = |z: i64| (1.0 - a) / (1.0 + a) * a.powi(z.unsigned_abs().min(i32::MAX as u64) as i32);
+    let released = |c: Option<i64>, o: i64| c.map_or(0.0, |c| pmf(o - c));
+    // P[c + Z < T] = P[Z ≤ T - c - 1] = P[Z ≥ c + 1 - T], by symmetry,
+    // computed directly: as 1 - P[Z ≥ T - c] it would lose precision when small
+    let dropped = |c: Option<i64>| {
+        c.map_or(1.0, |c| {
+            discrete_laplace_tail_ge(scale, (c + 1 - threshold) as f64)
+        })
+    };
+    let e = eps.exp();
+    let mut sum = (dropped(v) - e * dropped(w)).max(0.0);
+    // beyond `hi`, the remaining mass under P is below 1e-17
+    let hi = threshold.max(v.unwrap_or(0)).max(w.unwrap_or(0)) + (40.0 * scale).ceil() as i64 + 10;
+    for o in threshold..=hi {
+        sum += (released(v, o) - e * released(w, o)).max(0.0);
+    }
+    let beyond = v.map_or(0.0, |v| {
+        discrete_laplace_tail_ge(scale, (hi + 1 - v) as f64)
+    });
+    (sum, sum + beyond)
+}
+
 /// Counts of `noise` in the bins of [`discrete_laplace_probs`].
 pub(crate) fn histogram(noise: &[IBig], w: i64) -> Vec<u64> {
     let mut counts = vec![0u64; 2 * w as usize + 1];
@@ -365,5 +423,43 @@ mod test {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn test_discrete_laplace_tails() {
+        let a = (-1.0f64).exp();
+        let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * y.abs().max(1e-300);
+        assert!(close(discrete_laplace_tail_ge(1.0, 0.0), 1.0 / (1.0 + a)));
+        // P[Z ≥ 0] + P[Z ≥ 1] = P[Z ≥ 0] + P[Z ≤ -1] = 1
+        assert!(close(
+            discrete_laplace_tail_ge(3.0, 0.0) + discrete_laplace_tail_ge(3.0, 1.0),
+            1.0
+        ));
+        // P[Z ≥ -1] = 1 - P[Z ≤ -2] = 1 - P[Z ≥ 2]
+        assert!(close(
+            discrete_laplace_tail_ge(2.0, -1.0),
+            1.0 - discrete_laplace_tail_ge(2.0, 2.0)
+        ));
+        // without noise, Z = 0
+        assert_eq!(discrete_laplace_tail_ge(0.0, 0.0), 1.0);
+        assert_eq!(discrete_laplace_tail_ge(0.0, 1.0), 0.0);
+        assert!(close(any_of(0.5, 2.0), 0.75));
+        assert_eq!(any_of(1.0, 3.0), 1.0);
+    }
+
+    #[test]
+    fn test_single_key_hockey_stick() {
+        // identical outputs don't diverge
+        let (lo, hi) = single_key_hockey_stick(2.0, Some(3), Some(3), 5, 0.0);
+        assert!(lo.abs() < 1e-12 && hi < 1e-12);
+        assert_eq!(single_key_hockey_stick(2.0, None, None, 5, 0.0), (0.0, 0.0));
+        // at ε = 0 this is the total variation distance, which for an absent key
+        // is the probability that the present key is released
+        let (lo, hi) = single_key_hockey_stick(2.0, Some(4), None, 5, 0.0);
+        let p = discrete_laplace_tail_ge(2.0, 1.0);
+        assert!((lo - p).abs() < 1e-12 && (hi - p).abs() < 1e-12);
+        // no released value has positive probability under the absent key, so ε doesn't help
+        let (lo, _) = single_key_hockey_stick(2.0, Some(4), None, 5, 100.0);
+        assert!((lo - p).abs() < 1e-12);
     }
 }

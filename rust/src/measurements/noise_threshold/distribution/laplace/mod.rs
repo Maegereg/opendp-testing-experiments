@@ -27,6 +27,9 @@ pub(crate) mod ffi;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod test_props;
+
 #[bootstrap(
     features("contrib"),
     arguments(threshold(c_type = "void *", rust_type = "TV"), k(default = b"null")),

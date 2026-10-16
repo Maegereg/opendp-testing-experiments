@@ -393,6 +393,52 @@ pub(crate) fn map_distance_l01inf<K: Hash + Eq, V: PropInt>(
     (diffs.len(), l1, linf)
 }
 
+/// Like [`map_distance_l01inf`], for any values with an exact rational value (including floats),
+/// or `None` if a value isn't finite.
+pub(crate) fn map_distance_exact<K: Hash + Eq, V: ExactRat>(
+    a: &HashMap<K, V>,
+    b: &HashMap<K, V>,
+) -> Option<(usize, RBig, RBig)> {
+    let value = |m: &HashMap<K, V>, k: &K| m.get(k).map_or(Some(RBig::ZERO), ExactRat::exact);
+    let mut diffs = vec![];
+    for k in a.keys().chain(b.keys().filter(|k| !a.contains_key(k))) {
+        let d = abs_rat(value(a, k)? - value(b, k)?);
+        if d > RBig::ZERO {
+            diffs.push(d);
+        }
+    }
+    let l1 = diffs.iter().fold(RBig::ZERO, |s, d| s + d);
+    let linf = diffs.iter().cloned().max().unwrap_or(RBig::ZERO);
+    Some((diffs.len(), l1, linf))
+}
+
+/// A map with up to `max_keys` keys, and a neighbor formed by up to four edits:
+/// removing a key, adding a key, or changing a value, with values drawn from `value`.
+pub(crate) fn map_neighbors<V: Clone + Debug + 'static>(
+    value: BoxedStrategy<V>,
+    max_keys: usize,
+) -> impl Strategy<Value = (HashMap<u32, V>, HashMap<u32, V>)> {
+    let key_range = 2 * max_keys.max(1) as u32;
+    (
+        prop::collection::hash_map(0..key_range, value.clone(), 0..=max_keys),
+        prop::collection::vec((0u8..3, 0..key_range, value), 0..5),
+    )
+        .prop_map(|(x, edits)| {
+            let mut x2 = x.clone();
+            for (op, key, v) in edits {
+                match op {
+                    0 => {
+                        x2.remove(&key);
+                    }
+                    _ => {
+                        x2.insert(key, v);
+                    }
+                }
+            }
+            (x, x2)
+        })
+}
+
 // ---------------------------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------------------------
