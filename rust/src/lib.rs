@@ -150,6 +150,10 @@
 #![cfg_attr(feature = "ffi", allow(non_snake_case))]
 #![recursion_limit = "512"]
 
+// Creusot requires the contracts crate to be linked whenever it compiles this crate.
+#[cfg(creusot)]
+extern crate creusot_std;
+
 // create clones of variables that are free to be consumed by a closure
 // Once we have things using `enclose!` that are outside of `contrib`, this should specify `feature="ffi"`.
 #[cfg(feature = "contrib")]

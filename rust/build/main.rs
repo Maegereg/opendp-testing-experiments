@@ -14,6 +14,9 @@ fn main() {
     // Local builds are always variant 1, which is convenient because it allows Python interchange.
     autocfg::emit_possibility("patch_polars");
 
+    // Set by `cargo creusot` when compiling for formal verification.
+    autocfg::emit_possibility("creusot");
+
     let polars = std::env::var_os("CARGO_FEATURE_POLARS").is_some();
     let ffi = std::env::var_os("CARGO_FEATURE_FFI").is_some();
     let polars_ffi = std::env::var_os("CARGO_FEATURE_POLARS_FFI").is_some();

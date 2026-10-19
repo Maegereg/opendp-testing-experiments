@@ -2,7 +2,7 @@ use crate::{
     core::Metric,
     metrics::{
         ChangeOneDistance, EventLevelMetric, HammingDistance, InsertDeleteDistance,
-        MicrodataMetric, SymmetricDistance,
+        SymmetricDistance,
     },
 };
 
@@ -47,18 +47,42 @@ impl OrderedMetric for HammingDistance {
     type UnorderedMetric = ChangeOneDistance;
 }
 
-/// BoundedMetric is implemented for metrics that compute the distance between datasets via record edits.
-///
-/// # Proof Definition
-/// For any choice of x and x' where x' differs solely by the edit of one record, then $d(x, x') = 1$.
-pub trait BoundedMetric: MicrodataMetric {
-    /// UnboundedMetric denotes the associated metric that measures edit distance.
+pub use bounded::{BoundedMetric, UnboundedMetric};
+
+// Creusot rejects traits whose associated types refer to each other
+// (`BoundedMetric::UnboundedMetric: UnboundedMetric`, and vice versa),
+// unless they live in a trusted module. The traits only contain declarations.
+#[cfg_attr(creusot, creusot_std::prelude::trusted)]
+mod bounded {
+    use crate::metrics::MicrodataMetric;
+
+    /// BoundedMetric is implemented for metrics that compute the distance between datasets via record edits.
     ///
     /// # Proof Definition
-    /// For any choice of datasets x, x' where d(x, x') = 1 for a BoundedMetric d, then d'(x, x') = 2 for the corresponding UnboundedMetric d'.
-    type UnboundedMetric: UnboundedMetric;
-    fn to_unbounded(&self) -> Self::UnboundedMetric;
+    /// For any choice of x and x' where x' differs solely by the edit of one record, then $d(x, x') = 1$.
+    pub trait BoundedMetric: MicrodataMetric {
+        /// UnboundedMetric denotes the associated metric that measures edit distance.
+        ///
+        /// # Proof Definition
+        /// For any choice of datasets x, x' where d(x, x') = 1 for a BoundedMetric d, then d'(x, x') = 2 for the corresponding UnboundedMetric d'.
+        type UnboundedMetric: UnboundedMetric;
+        fn to_unbounded(&self) -> Self::UnboundedMetric;
+    }
+
+    /// UnboundedMetric is implemented for metrics that compute the distance between datasets via record additions and removals.
+    ///
+    /// # Proof Definition
+    /// For any choice of x and x' where x' differs solely by the addition or removal of one record, then $d(x, x') = 1$.
+    pub trait UnboundedMetric: MicrodataMetric {
+        /// BoundedMetric denotes the associated metric that measures edit distance.
+        ///
+        /// # Proof Definition
+        /// For any choice of datasets x, x' where d(x, x') = 1 for a BoundedMetric d, then d'(x, x') = 2 for a corresponding UnboundedMetric d'.
+        type BoundedMetric: BoundedMetric;
+        fn to_bounded(&self) -> Self::BoundedMetric;
+    }
 }
+
 impl BoundedMetric for ChangeOneDistance {
     type UnboundedMetric = SymmetricDistance;
     fn to_unbounded(&self) -> Self::UnboundedMetric {
@@ -81,18 +105,6 @@ impl BoundedMetric for ChangeOneIdDistance {
     }
 }
 
-/// UnboundedMetric is implemented for metrics that compute the distance between datasets via record additions and removals.
-///
-/// # Proof Definition
-/// For any choice of x and x' where x' differs solely by the addition or removal of one record, then $d(x, x') = 1$.
-pub trait UnboundedMetric: MicrodataMetric {
-    /// BoundedMetric denotes the associated metric that measures edit distance.
-    ///
-    /// # Proof Definition
-    /// For any choice of datasets x, x' where d(x, x') = 1 for a BoundedMetric d, then d'(x, x') = 2 for a corresponding UnboundedMetric d'.
-    type BoundedMetric: BoundedMetric;
-    fn to_bounded(&self) -> Self::BoundedMetric;
-}
 impl UnboundedMetric for SymmetricDistance {
     type BoundedMetric = ChangeOneDistance;
     fn to_bounded(&self) -> Self::BoundedMetric {

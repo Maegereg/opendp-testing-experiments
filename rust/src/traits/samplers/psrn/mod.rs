@@ -1,10 +1,7 @@
 use std::fmt::Debug;
 
 use dashu::{
-    float::round::{
-        Round,
-        mode::{Down, Up},
-    },
+    float::round::mode::{Down, Up},
     integer::{IBig, UBig},
     rational::RBig,
 };
@@ -137,19 +134,29 @@ impl<D: InverseCDF> PartialSample<D> {
     }
 }
 
-/// Rounding directions used in PSRNs.
-///
-/// Implemented for Down and Up, respectively for lower and upper bounds.
-pub trait ODPRound: Round {
-    /// * Down::UBIG = Zero
-    /// * Up::UBIG = One
-    const UBIG: UBig;
+pub use round::ODPRound;
 
-    /// Type of the complement.
+// Creusot rejects traits whose associated types refer back to themselves
+// (`ODPRound::C: ODPRound<C = Self>`), unless they live in a trusted module.
+// The trait only contains declarations.
+#[cfg_attr(creusot, creusot_std::prelude::trusted)]
+mod round {
+    use dashu::{float::round::Round, integer::UBig};
+
+    /// Rounding directions used in PSRNs.
     ///
-    /// * Down::C = Up
-    /// * Up::C = Down
-    type C: ODPRound<C = Self>;
+    /// Implemented for Down and Up, respectively for lower and upper bounds.
+    pub trait ODPRound: Round {
+        /// * Down::UBIG = Zero
+        /// * Up::UBIG = One
+        const UBIG: UBig;
+
+        /// Type of the complement.
+        ///
+        /// * Down::C = Up
+        /// * Up::C = Down
+        type C: ODPRound<C = Self>;
+    }
 }
 
 impl ODPRound for Down {

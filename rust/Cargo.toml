@@ -12,6 +12,10 @@ rust-version = "1.88.0" # MSRV via `cargo install cargo-msrv && cargo msrv --min
 members = [".", "opendp_derive", "opendp_tooling"]
 default-members = [".", "opendp_derive", "opendp_tooling"]
 
+# `cargo creusot` only verifies the main library crate.
+[workspace.metadata.creusot]
+default-members = ["opendp"]
+
 [workspace.dependencies]
 syn = { version = "2.0", features = ["full", "parsing"] }
 quote = { version = "1.0" }
@@ -74,6 +78,11 @@ serde = { version = "1.0", optional = true }
 serde-pickle = { version = "1.1", optional = true }
 
 lazy_static = { version = "1.4.0", optional = true }
+
+# Formal verification with Creusot. `creusot-rustc` sets `--cfg creusot`, so this
+# dependency is only built under `cargo creusot`; normal builds never compile it.
+[target.'cfg(creusot)'.dependencies]
+creusot-std = "=0.14.0"
 
 [build-dependencies]
 autocfg = "1.4"

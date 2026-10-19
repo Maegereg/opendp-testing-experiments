@@ -707,16 +707,28 @@ impl<T: CheckAtom> MetricSpace for (VectorDomain<AtomDomain<T>>, LInfDistance<T>
     }
 }
 
-pub trait MicrodataMetric: 'static + Metric<Distance = IntDistance> {
-    /// Whether adjacent datasets share the same number of element.
-    const SIZED: bool;
-    /// Whether the metric is sensitive to reordering of elements.
-    const ORDERED: bool;
-    #[cfg(feature = "polars")]
-    /// The identifier column if defined.
-    fn identifier(&self) -> Option<polars_plan::dsl::Expr>;
+pub use microdata::{EventLevelMetric, MicrodataMetric};
 
-    type EventMetric: EventLevelMetric;
+// Creusot rejects traits whose associated types refer back to themselves
+// (`MicrodataMetric::EventMetric: EventLevelMetric: MicrodataMetric`),
+// unless they live in a trusted module. The traits only contain declarations.
+#[cfg_attr(creusot, creusot_std::prelude::trusted)]
+mod microdata {
+    use super::{IntDistance, Metric};
+
+    pub trait MicrodataMetric: 'static + Metric<Distance = IntDistance> {
+        /// Whether adjacent datasets share the same number of element.
+        const SIZED: bool;
+        /// Whether the metric is sensitive to reordering of elements.
+        const ORDERED: bool;
+        #[cfg(feature = "polars")]
+        /// The identifier column if defined.
+        fn identifier(&self) -> Option<polars_plan::dsl::Expr>;
+
+        type EventMetric: EventLevelMetric;
+    }
+
+    pub trait EventLevelMetric: MicrodataMetric + Default {}
 }
 impl MicrodataMetric for SymmetricDistance {
     const SIZED: bool = false;
@@ -754,8 +766,6 @@ impl MicrodataMetric for HammingDistance {
     }
     type EventMetric = HammingDistance;
 }
-
-pub trait EventLevelMetric: MicrodataMetric + Default {}
 
 impl EventLevelMetric for SymmetricDistance {}
 impl EventLevelMetric for InsertDeleteDistance {}
