@@ -274,3 +274,45 @@ impl Iterator for Sequence {
         }
     }
 }
+
+// Creusot requires every `Iterator` to describe what it produces.
+#[cfg(creusot)]
+mod sequence_spec {
+    use super::Sequence;
+    use creusot_std::prelude::*;
+
+    impl IteratorSpec for Sequence {
+        #[logic(open(super), prophetic)]
+        fn completed(&mut self) -> bool {
+            pearlite! {
+                match *self {
+                    Sequence::Range(r) => resolve(self) && r.start@ >= r.end@,
+                    // never runs out of zeros
+                    Sequence::Zero => false,
+                }
+            }
+        }
+
+        #[logic(open(super))]
+        fn produces(self, visited: Seq<usize>, o: Self) -> bool {
+            pearlite! {
+                match (self, o) {
+                    (Sequence::Range(r), Sequence::Range(r2)) => r.produces(visited, r2),
+                    (Sequence::Zero, Sequence::Zero) =>
+                        forall<i> 0 <= i && i < visited.len() ==> visited[i] == 0usize,
+                    _ => false,
+                }
+            }
+        }
+
+        #[logic(law)]
+        #[ensures(self.produces(Seq::empty(), self))]
+        fn produces_refl(self) {}
+
+        #[logic(law)]
+        #[requires(a.produces(ab, b))]
+        #[requires(b.produces(bc, c))]
+        #[ensures(a.produces(ab.concat(bc), c))]
+        fn produces_trans(a: Self, ab: Seq<usize>, b: Self, bc: Seq<usize>, c: Self) {}
+    }
+}

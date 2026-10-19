@@ -250,7 +250,7 @@ impl<MI: 'static + Metric, MO: 'static + Metric> StabilityMap<MI, MO> {
 /// It is, however, left to constructor functions to prove that:
 /// * `input_metric` is compatible with `input_domain`
 /// * `privacy_map` is a mapping from the input metric to the output measure
-#[readonly::make]
+#[cfg_attr(not(creusot), readonly::make)]
 pub struct Measurement<DI: Domain, MI: Metric, MO: Measure, TO> {
     pub input_domain: DI,
     pub input_metric: MI,
@@ -360,7 +360,7 @@ pub trait MetricSpace {
 /// * `function` is a mapping from the input domain to the output domain
 /// * `stability_map` is a mapping from the input metric to the output metric
 #[derive(Clone)]
-#[readonly::make]
+#[cfg_attr(not(creusot), readonly::make)]
 pub struct Transformation<DI: Domain, MI: Metric, DO: Domain, MO: Metric> {
     pub input_domain: DI,
     pub input_metric: MI,
@@ -458,7 +458,7 @@ impl<DI: Domain, MI: Metric, DO: Domain, MO: Metric> Debug for Transformation<DI
 /// The odometer is defined in terms of [HSTV+](https://arxiv.org/abs/2309.05901),
 /// but the truncated view as defined in Definition 1.13 is also parameterized by $d_{in}$,
 /// and $(\epsilon, \delta)$ is generalized to $d_{out}$.
-#[readonly::make]
+#[cfg_attr(not(creusot), readonly::make)]
 pub struct Odometer<DI: Domain, MI: Metric, MO: Measure, Q, A> {
     pub input_domain: DI,
     pub input_metric: MI,

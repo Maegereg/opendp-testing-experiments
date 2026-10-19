@@ -145,6 +145,7 @@ impl Wrapper {
 impl Deref for Wrapper {
     type Target = dyn Fn(PolyQueryable) -> Fallible<PolyQueryable>;
 
+    #[cfg_attr(creusot, creusot_std::macros::check(ghost))]
     fn deref(&self) -> &Self::Target {
         &*self.0
     }

@@ -189,6 +189,9 @@ pub mod combinators;
 pub mod core;
 pub mod data;
 pub mod domains;
+// Queryables rely on thread-locals, `dyn Fn` derefs and mutual recursion,
+// which Creusot cannot translate. Treat them as trusted for now.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod interactive;
 #[cfg(feature = "ffi")]
 pub mod internal;
