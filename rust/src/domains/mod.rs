@@ -86,6 +86,19 @@ pub struct AtomDomain<T: CheckAtom> {
     pub bounds: Option<Bounds<T>>,
     nan: bool,
 }
+// Hand-written because the derive cannot expose the private `nan` field,
+// and because the carrier `T` (e.g. `dashu::IBig`) need not have a `DeepModel`.
+#[cfg(creusot)]
+impl<T: CheckAtom> creusot_std::model::DeepModel for AtomDomain<T> {
+    type DeepModelTy = (
+        <Option<Bounds<T>> as creusot_std::model::DeepModel>::DeepModelTy,
+        bool,
+    );
+    #[creusot_std::macros::logic(open(self))]
+    fn deep_model(self) -> Self::DeepModelTy {
+        (self.bounds.deep_model(), self.nan)
+    }
+}
 
 impl<T: CheckAtom> Debug for AtomDomain<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -170,6 +183,8 @@ impl<T: CheckAtom> Domain for AtomDomain<T> {
 pub struct NaN<T> {
     pub _marker: PhantomData<T>,
 }
+#[cfg(creusot)]
+unit_deep_model!([T] NaN<T>);
 impl<T> Clone for NaN<T> {
     fn clone(&self) -> Self {
         Self {
@@ -204,6 +219,16 @@ impl<T: HasNull> NaN<T> {
 pub struct Bounds<T> {
     lower: Bound<T>,
     upper: Bound<T>,
+}
+// The carrier `T` (e.g. `dashu::IBig`) need not have a `DeepModel`,
+// so the deep model of bounds is left uninterpreted.
+#[cfg(creusot)]
+impl<T> creusot_std::model::DeepModel for Bounds<T> {
+    type DeepModelTy = Bounds<T>;
+    #[creusot_std::macros::logic(opaque)]
+    fn deep_model(self) -> Self::DeepModelTy {
+        dead
+    }
 }
 impl<T: PartialOrd + Debug + CheckNull> Bounds<T> {
     pub fn new_closed(bounds: (T, T)) -> Fallible<Self> {
@@ -346,7 +371,8 @@ impl<T: Clone + ProductOrd> Bounds<T> {
 /// assert!(!domain.member(&hashmap)?);
 /// # opendp::error::Fallible::Ok(())
 /// ```
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, crate::verification::PartialEq, Debug, Default)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct MapDomain<DK: Domain, DV: Domain>
 where
     DK::Carrier: Eq + Hash,
@@ -420,7 +446,8 @@ where
 /// assert!(!sized_domain.member(&vec![1, 2])?);
 /// # opendp::error::Fallible::Ok(())
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(Clone, crate::verification::PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct VectorDomain<D: Domain> {
     pub element_domain: D,
     pub size: Option<usize>,
@@ -479,6 +506,7 @@ pub type BitVector = BitVec<u8, Lsb0>;
 ///
 /// If a maximum weight is specified, then it is restricted to all vectors up to a specified Hamming weight
 #[derive(Clone, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct BitVectorDomain {
     pub max_weight: Option<usize>,
 }
@@ -541,7 +569,8 @@ impl Domain for BitVectorDomain {
 ///
 /// # opendp::error::Fallible::Ok(())
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(Clone, crate::verification::PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct OptionDomain<D: Domain> {
     pub element_domain: D,
 }
@@ -591,7 +620,8 @@ mod contrib {
     use super::*;
 
     /// A Domain that contains pairs of values.
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, crate::verification::PartialEq, Debug)]
+    #[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
     pub struct PairDomain<D0: Domain, D1: Domain>(pub D0, pub D1);
     impl<D0: Domain, D1: Domain> PairDomain<D0, D1> {
         pub fn new(element_domain0: D0, element_domain1: D1) -> Self {
@@ -606,9 +636,18 @@ mod contrib {
     }
 
     /// A Domain that carries an underlying Domain in a Box.
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, crate::verification::PartialEq, Debug)]
     pub struct BoxDomain<D: Domain> {
         element_domain: Box<D>,
+    }
+    // Hand-written because the derive cannot expose the private field.
+    #[cfg(creusot)]
+    impl<D: Domain + creusot_std::model::DeepModel> creusot_std::model::DeepModel for BoxDomain<D> {
+        type DeepModelTy = <Box<D> as creusot_std::model::DeepModel>::DeepModelTy;
+        #[creusot_std::macros::logic(open(self))]
+        fn deep_model(self) -> Self::DeepModelTy {
+            self.element_domain.deep_model()
+        }
     }
     impl<D: Domain> BoxDomain<D> {
         pub fn new(element_domain: Box<D>) -> Self {
@@ -623,7 +662,8 @@ mod contrib {
     }
 
     /// A Domain that unwraps a Data wrapper.
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, crate::verification::PartialEq, Debug)]
+    #[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
     pub struct DataDomain<D: Domain> {
         pub form_domain: D,
     }

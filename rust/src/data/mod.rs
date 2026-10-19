@@ -92,8 +92,19 @@ impl Clone for Column {
 }
 
 impl PartialEq for Column {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(other.0.as_any())
+    }
+}
+// Columns compare through a type-erased vector, so their deep model is left uninterpreted:
+// the (trusted) `eq` above is only assumed to be a consistent equivalence.
+#[cfg(creusot)]
+impl creusot_std::model::DeepModel for Column {
+    type DeepModelTy = Column;
+    #[creusot_std::macros::logic(opaque)]
+    fn deep_model(self) -> Column {
+        dead
     }
 }
 

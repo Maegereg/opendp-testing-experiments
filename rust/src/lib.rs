@@ -154,6 +154,10 @@
 #[cfg(creusot)]
 extern crate creusot_std;
 
+#[macro_use]
+#[doc(hidden)]
+pub mod verification;
+
 // create clones of variables that are free to be consumed by a closure
 // Once we have things using `enclose!` that are outside of `contrib`, this should specify `feature="ffi"`.
 #[cfg(feature = "contrib")]

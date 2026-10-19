@@ -31,6 +31,7 @@ use std::sync::Arc;
 use crate::error::*;
 use crate::interactive::Queryable;
 use crate::traits::{DistanceConstant, InfCast, InfMul, ProductOrd};
+use crate::verification::MaybeDeepModel;
 use num::Zero;
 use std::fmt::{Debug, Display};
 
@@ -40,7 +41,7 @@ use std::fmt::{Debug, Display};
 ///
 /// # Proof Definition
 /// A type `Self` implements `Domain` iff it can represent a set of values that make up a domain.
-pub trait Domain: Clone + PartialEq + Debug {
+pub trait Domain: Clone + PartialEq + Debug + MaybeDeepModel {
     /// The underlying type that the Domain specializes.
     /// This is the type of a member of a domain, where a domain is any data type that implements this trait.
     ///
@@ -112,7 +113,7 @@ impl<TI: 'static, TO: 'static> Function<TI, TO> {
 ///
 /// # Proof Definition
 /// A type `Self` has an implementation for `Metric` iff it can represent a metric for quantifying distances between values in a set.
-pub trait Metric: Clone + PartialEq + Debug {
+pub trait Metric: Clone + PartialEq + Debug + MaybeDeepModel {
     /// # Proof Definition
     /// `Self::Distance` is a type that represents distances in terms of a metric `Self`.
     type Distance;
@@ -123,7 +124,7 @@ pub trait Metric: Clone + PartialEq + Debug {
 /// # Proof Definition
 /// A type `Self` has an implementation for `Measure` iff it can represent a measure for quantifying distances between distributions.
 
-pub trait Measure: Default + Clone + PartialEq + Debug {
+pub trait Measure: Default + Clone + PartialEq + Debug + MaybeDeepModel {
     /// # Proof Definition
     /// `Self::Distance` is a type that represents distances in terms of a measure `Self`.
     type Distance;

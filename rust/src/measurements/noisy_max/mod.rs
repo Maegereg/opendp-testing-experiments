@@ -116,6 +116,7 @@ where
 #[derive(PartialEq, Clone, Copy, Debug)]
 #[cfg_attr(feature = "polars", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "polars", serde(rename_all = "lowercase"))]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub enum Optimize {
     Min,
     Max,

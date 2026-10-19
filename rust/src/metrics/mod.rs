@@ -62,6 +62,7 @@ pub type IntDistance = u32;
 ///
 /// When this metric is paired with a `VectorDomain`, we instead consider the multisets corresponding to $u, v \in \texttt{D}$.
 #[derive(Clone)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct SymmetricDistance;
 
 impl Default for SymmetricDistance {
@@ -132,6 +133,7 @@ impl<K: Hashable> MetricSpace for (DataFrameDomain<K>, SymmetricDistance) {
 ///
 /// * `VectorDomain<D>` for any valid `D`
 #[derive(Clone)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct InsertDeleteDistance;
 
 impl Default for InsertDeleteDistance {
@@ -204,6 +206,7 @@ impl<K: Hashable> MetricSpace for (DataFrameDomain<K>, InsertDeleteDistance) {
 ///
 /// * `VectorDomain<D>` for any valid `D`, when `VectorDomain::size.is_some()`.
 #[derive(Clone)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct ChangeOneDistance;
 
 impl Default for ChangeOneDistance {
@@ -269,6 +272,7 @@ impl<D: Domain> MetricSpace for (VectorDomain<D>, ChangeOneDistance) {
 ///
 /// * `VectorDomain<D>` for any valid `D`, when `VectorDomain::size.is_some()`.
 #[derive(Clone)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct HammingDistance;
 
 impl Default for HammingDistance {
@@ -339,6 +343,8 @@ impl<const P: usize, Q> PartialEq for LpDistance<P, Q> {
         true
     }
 }
+#[cfg(creusot)]
+unit_deep_model!([const P: usize, Q] LpDistance<P, Q>);
 impl<const P: usize, Q> Debug for LpDistance<P, Q> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "L{}Distance({})", P, type_name!(Q))
@@ -435,6 +441,8 @@ impl<Q> PartialEq for AbsoluteDistance<Q> {
         true
     }
 }
+#[cfg(creusot)]
+unit_deep_model!([Q] AbsoluteDistance<Q>);
 impl<Q> Debug for AbsoluteDistance<Q> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "AbsoluteDistance({})", type_name!(Q))
@@ -476,7 +484,8 @@ impl<T: CheckAtom, Q> MetricSpace for (AtomDomain<T>, AbsoluteDistance<Q>) {
 /// ```math
 /// |s|_0 \leq d_0 \land |s|_\infty \leq d_1.
 /// ```
-#[derive(Clone, PartialEq, Default)]
+#[derive(Clone, crate::verification::PartialEq, Default)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct L0InfDistance<M: Metric>(pub M);
 impl<M: Metric> Debug for L0InfDistance<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -514,7 +523,8 @@ impl<M: Metric> Metric for L0InfDistance<M> {
 /// ```math
 /// |s|_0 \leq d_0 \land |s|_P \leq d_1 \land |s|_\infty \leq d_2.
 /// ```
-#[derive(Clone, PartialEq, Default)]
+#[derive(Clone, crate::verification::PartialEq, Default)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct L0PInfDistance<const P: usize, M: Metric>(pub M);
 
 pub type L01InfDistance<M> = L0PInfDistance<1, M>;
@@ -568,6 +578,7 @@ impl<T: CheckAtom, const P: usize> MetricSpace
 /// # Compatible Domains
 /// * `AtomDomain<T>` for any valid `T`.
 #[derive(Clone, Default, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct DiscreteDistance;
 
 impl Debug for DiscreteDistance {
@@ -684,6 +695,14 @@ impl<Q> Clone for LInfDistance<Q> {
 impl<Q> PartialEq for LInfDistance<Q> {
     fn eq(&self, other: &Self) -> bool {
         self.monotonic == other.monotonic
+    }
+}
+#[cfg(creusot)]
+impl<Q> creusot_std::model::DeepModel for LInfDistance<Q> {
+    type DeepModelTy = bool;
+    #[creusot_std::macros::logic(open)]
+    fn deep_model(self) -> bool {
+        self.monotonic
     }
 }
 impl<Q> Debug for LInfDistance<Q> {

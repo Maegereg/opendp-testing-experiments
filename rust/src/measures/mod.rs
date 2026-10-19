@@ -33,6 +33,7 @@ use crate::{
 /// D_\infty(Y, Y') = \max_{S \subseteq \textrm{Supp}(Y)} \Big[\ln \dfrac{\Pr[Y \in S]}{\Pr[Y' \in S]} \Big] \leq d.
 /// ```
 #[derive(Default, Clone, Debug, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct MaxDivergence;
 
 impl Measure for MaxDivergence {
@@ -68,6 +69,7 @@ impl Measure for MaxDivergence {
 /// until quantified over all adjacent datasets,
 /// as is done in the definition of a measurement.
 #[derive(Default, Clone, Debug, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct SmoothedMaxDivergence;
 
 impl Measure for SmoothedMaxDivergence {
@@ -198,7 +200,8 @@ impl PrivacyProfile {
 ///
 /// Note that $d'$ and $\delta$ are not privacy parameters until quantified over
 /// all adjacent datasets, as is done in the definition of a measurement.
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, crate::verification::PartialEq, Debug, Default)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct Approximate<PM: Measure>(pub PM);
 
 impl<M: Measure> Measure for Approximate<M> {
@@ -229,6 +232,7 @@ impl<M: Measure> Measure for Approximate<M> {
 /// \right)^\alpha \right] \le d \cdot \alpha.
 /// ```
 #[derive(Default, Clone, Debug, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct ZeroConcentratedDivergence;
 
 impl Measure for ZeroConcentratedDivergence {
@@ -262,6 +266,7 @@ impl Measure for ZeroConcentratedDivergence {
 /// until quantified over all adjacent datasets,
 /// as is done in the definition of a measurement.
 #[derive(Default, Clone, Debug, PartialEq)]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct RenyiDivergence;
 
 impl Measure for RenyiDivergence {

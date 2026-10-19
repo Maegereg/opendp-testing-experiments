@@ -65,9 +65,22 @@ impl PartialEq for Error {
         self.variant == other.variant && self.message == other.message
     }
 }
+// Equality ignores the backtrace, so the deep model does too.
+#[cfg(creusot)]
+impl creusot_std::model::DeepModel for Error {
+    type DeepModelTy = (
+        <ErrorVariant as creusot_std::model::DeepModel>::DeepModelTy,
+        <Option<String> as creusot_std::model::DeepModel>::DeepModelTy,
+    );
+    #[creusot_std::macros::logic(open)]
+    fn deep_model(self) -> Self::DeepModelTy {
+        (self.variant.deep_model(), self.message.deep_model())
+    }
+}
 
 #[derive(PartialEq, thiserror::Error, Debug)]
 #[non_exhaustive]
+#[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub enum ErrorVariant {
     #[error("FFI")]
     FFI,

@@ -26,6 +26,8 @@ pub type DataFrame<K> = HashMap<K, Column>;
 pub struct DataFrameDomain<K: Hash + Eq> {
     pub _marker: PhantomData<fn() -> K>,
 }
+#[cfg(creusot)]
+unit_deep_model!([K: Hash + Eq] DataFrameDomain<K>);
 impl<K: Hash + Eq> Clone for DataFrameDomain<K> {
     fn clone(&self) -> Self {
         Self::new()
