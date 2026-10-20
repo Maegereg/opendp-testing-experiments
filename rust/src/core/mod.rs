@@ -32,6 +32,12 @@ use crate::error::*;
 use crate::interactive::Queryable;
 use crate::traits::{DistanceConstant, InfCast, InfMul, ProductOrd};
 use crate::verification::MaybeDeepModel;
+#[cfg(creusot)]
+use creusot_std::{
+    logic::Mapping,
+    macros::{ensures, logic, requires, trusted},
+    std::ops::{FnExt, FnOnceExt},
+};
 use num::Zero;
 use std::fmt::{Debug, Display};
 
@@ -75,6 +81,8 @@ pub struct Function<TI, TO> {
     pub function: Arc<dyn Fn(&TI) -> Fallible<TO>>,
 }
 impl<TI, TO> Clone for Function<TI, TO> {
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result.pre() == self.pre() && result.post() == self.post()))]
     fn clone(&self) -> Self {
         Function {
             function: self.function.clone(),
@@ -82,23 +90,54 @@ impl<TI, TO> Clone for Function<TI, TO> {
     }
 }
 
+// Under Creusot, a `Function` carries a ghost model of the contract of the closure it wraps,
+// because the contract cannot be recovered from the type-erased `dyn Fn`.
+// The methods that create or call the closure are trusted to preserve this model.
+#[cfg(creusot)]
 impl<TI, TO> Function<TI, TO> {
+    /// Ghost model: the inputs on which the function may be evaluated.
+    #[logic(opaque)]
+    pub fn pre(self) -> Mapping<TI, bool> {
+        dead
+    }
+
+    /// Ghost model: the relation between inputs and results.
+    #[logic(opaque)]
+    pub fn post(self) -> Mapping<TI, Mapping<Fallible<TO>, bool>> {
+        dead
+    }
+}
+
+impl<TI, TO> Function<TI, TO> {
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<a: TI> result.pre()[a] == function.precondition((&a,))))]
+    #[cfg_attr(creusot, ensures(forall<a: TI, r: TO>
+        result.post()[a][Ok(r)] == function.postcondition((&a,), r)))]
+    #[cfg_attr(creusot, ensures(forall<a: TI, e: Error> !result.post()[a][Err(e)]))]
     pub fn new(function: impl Fn(&TI) -> TO + 'static) -> Self {
         Self::new_fallible(move |arg| Ok(function(arg)))
     }
 
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<a: TI> result.pre()[a] == function.precondition((&a,))))]
+    #[cfg_attr(creusot, ensures(forall<a: TI, r: Fallible<TO>>
+        result.post()[a][r] == function.postcondition((&a,), r)))]
     pub fn new_fallible(function: impl Fn(&TI) -> Fallible<TO> + 'static) -> Self {
         Self {
             function: Arc::new(function),
         }
     }
 
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, requires(self.pre()[*arg]))]
+    #[cfg_attr(creusot, ensures(self.post()[*arg][result]))]
     pub fn eval(&self, arg: &TI) -> Fallible<TO> {
         (self.function)(arg)
     }
 }
 
 impl<TI: 'static, TO: 'static> Function<TI, TO> {
+    #[cfg_attr(creusot, trusted)]
     pub fn make_chain<TX: 'static>(
         function1: &Function<TX, TO>,
         function0: &Function<TI, TX>,
@@ -139,15 +178,18 @@ pub struct PrivacyMap<MI: Metric, MO: Measure>(
 );
 
 impl<MI: Metric, MO: Measure> Clone for PrivacyMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
     fn clone(&self) -> Self {
         PrivacyMap(self.0.clone())
     }
 }
 
 impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
     pub fn new(map: impl Fn(&MI::Distance) -> MO::Distance + 'static) -> Self {
         PrivacyMap(Arc::new(move |d_in: &MI::Distance| Ok(map(d_in))))
     }
+    #[cfg_attr(creusot, trusted)]
     pub fn new_fallible(map: impl Fn(&MI::Distance) -> Fallible<MO::Distance> + 'static) -> Self {
         PrivacyMap(Arc::new(map))
     }
@@ -156,6 +198,7 @@ impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
     /// Creates a privacy map from `d_in` to `d_out`
     /// where `d_out = MO.inf_cast(d_in).inf_mul(c) >= d_in * c`,
     /// or returns an error.
+    #[cfg_attr(creusot, trusted)]
     pub fn new_from_constant(c: MO::Distance) -> Self
     where
         MI::Distance: Clone,
@@ -168,12 +211,14 @@ impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
             MO::Distance::inf_cast(d_in.clone())?.inf_mul(&c)
         })
     }
+    #[cfg_attr(creusot, trusted)]
     pub fn eval(&self, input_distance: &MI::Distance) -> Fallible<MO::Distance> {
         (self.0)(input_distance)
     }
 }
 
 impl<MI: 'static + Metric, MO: 'static + Measure> PrivacyMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
     pub fn make_chain<MX: 'static + Metric>(
         map1: &PrivacyMap<MX, MO>,
         map0: &StabilityMap<MI, MX>,
@@ -193,15 +238,37 @@ pub struct StabilityMap<MI: Metric, MO: Metric>(
 );
 
 impl<MI: Metric, MO: Metric> Clone for StabilityMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result.post() == self.post()))]
     fn clone(&self) -> Self {
         StabilityMap(self.0.clone())
     }
 }
 
+// Under Creusot, a `StabilityMap` carries a ghost model of the contract of the closure it wraps.
+// Maps may be evaluated on any input distance, so the closure must be total.
+#[cfg(creusot)]
 impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
+    /// Ghost model: the relation between input distances and results.
+    #[logic(opaque)]
+    pub fn post(self) -> Mapping<MI::Distance, Mapping<Fallible<MO::Distance>, bool>> {
+        dead
+    }
+}
+
+impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> map.precondition((&d,))))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: MO::Distance>
+        result.post()[d][Ok(r)] == map.postcondition((&d,), r)))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, e: Error> !result.post()[d][Err(e)]))]
     pub fn new(map: impl Fn(&MI::Distance) -> MO::Distance + 'static + Send + Sync) -> Self {
         StabilityMap(Arc::new(move |d_in: &MI::Distance| Ok(map(d_in))))
     }
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> map.precondition((&d,))))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: Fallible<MO::Distance>>
+        result.post()[d][r] == map.postcondition((&d,), r)))]
     pub fn new_fallible(
         map: impl Fn(&MI::Distance) -> Fallible<MO::Distance> + 'static + Send + Sync,
     ) -> Self {
@@ -212,6 +279,7 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
     /// Creates a stability map from `d_in` to `d_out`
     /// where `d_out = MO.inf_cast(d_in).inf_mul(c) >= d_in * c`,
     /// or returns an error.
+    #[cfg_attr(creusot, trusted)]
     pub fn new_from_constant(c: MO::Distance) -> Self
     where
         MI::Distance: Clone,
@@ -224,12 +292,15 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
             MO::Distance::inf_cast(d_in.clone())?.inf_mul(&c)
         })
     }
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(self.post()[*input_distance][result]))]
     pub fn eval(&self, input_distance: &MI::Distance) -> Fallible<MO::Distance> {
         (self.0)(input_distance)
     }
 }
 
 impl<MI: 'static + Metric, MO: 'static + Metric> StabilityMap<MI, MO> {
+    #[cfg_attr(creusot, trusted)]
     pub fn make_chain<MX: 'static + Metric>(
         map1: &StabilityMap<MX, MO>,
         map0: &StabilityMap<MI, MX>,

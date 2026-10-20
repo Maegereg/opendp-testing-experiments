@@ -1,6 +1,7 @@
 //! Traits that enable building stable and private algorithms.
 
 use crate::metrics::IntDistance;
+use crate::verification::MaybeIntModel;
 use num::{NumCast, One, Zero};
 use std::hash::Hash;
 use std::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
@@ -11,15 +12,18 @@ pub use bounded::*;
 mod arithmetic;
 pub use arithmetic::*;
 
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod cast;
 pub use cast::*;
 
 mod domains;
 pub use domains::*;
 
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod operations;
 pub use operations::*;
 
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod samplers;
 
 /// A type that can be used as a stability or privacy constant to scale a distance.
@@ -250,8 +254,8 @@ impl<T> Number for T where
 ///
 /// test_func(1i8);
 /// ```
-pub trait Integer: Number + Hashable + Ord {}
-impl<T> Integer for T where T: Number + Hashable + Ord {}
+pub trait Integer: Number + Hashable + Ord + MaybeIntModel {}
+impl<T> Integer for T where T: Number + Hashable + Ord + MaybeIntModel {}
 
 /// Floating-point types.
 ///

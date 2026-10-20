@@ -247,3 +247,7 @@ rust/aeneas-out/
 rust/opendp_verified/Generated/
 SampCert/
 aeneas/
+# Creusot (formal verification) generated files
+/rust/verif/
+/rust/_creusot_erasure/
+/rust/.why3find/

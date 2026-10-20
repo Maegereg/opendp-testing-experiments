@@ -5,7 +5,7 @@ use crate::{
     domains::{AtomDomain, VectorDomain},
     error::Fallible,
     metrics::{AbsoluteDistance, IntDistance, SymmetricDistance},
-    traits::{Integer, Number},
+    traits::Integer,
 };
 
 #[cfg(feature = "ffi")]
@@ -105,7 +105,7 @@ pub fn make_sized_bounded_int_monotonic_sum<T: Integer>(
 /// # Proof Definition
 /// Returns true if and only if the signs of `a` and `b` agree,
 /// assuming that values of zero always agree.
-pub(crate) fn signs_agree<T: Number>((a, b): (T, T)) -> bool {
+pub(crate) fn signs_agree<T: Integer>((a, b): (T, T)) -> bool {
     let _0 = T::zero();
     a == _0 || b == _0 || (a > _0) == (b > _0)
 }

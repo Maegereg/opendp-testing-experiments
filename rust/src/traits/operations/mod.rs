@@ -351,6 +351,8 @@ impl_ProductOrd_for_ord!(chrono::NaiveTime);
 macro_rules! impl_total_ord_for_float {
     ($($ty:ty),*) => {
         $(impl ProductOrd for $ty {
+            // Trusted: floats have no sound `DeepModel` (IEEE equality is not logical equality).
+            #[cfg_attr(creusot, creusot_std::macros::trusted)]
             fn total_cmp(&self, other: &Self) -> Fallible<Ordering> {
                 PartialOrd::partial_cmp(self, other)
                     .ok_or_else(|| err!(FailedFunction, concat!(stringify!($ty), " cannot not be null when clamping.")))

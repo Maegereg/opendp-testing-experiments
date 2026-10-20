@@ -17,6 +17,7 @@ use std::panic;
 mod test;
 
 // for context on why this is used, see conversation on https://github.com/cmpute/dashu/issues/29
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 fn catch_unwind_silent<R>(f: impl FnOnce() -> R + panic::UnwindSafe) -> std::thread::Result<R> {
     let prev_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));

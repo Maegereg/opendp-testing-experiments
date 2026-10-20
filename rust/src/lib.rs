@@ -184,10 +184,14 @@ extern crate lazy_static;
 #[macro_use]
 pub mod error;
 
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod accuracy;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod combinators;
 pub mod core;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod data;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod domains;
 // Queryables rely on thread-locals, `dyn Fn` derefs and mutual recursion,
 // which Creusot cannot translate. Treat them as trusted for now.
@@ -195,11 +199,14 @@ pub mod domains;
 pub mod interactive;
 #[cfg(feature = "ffi")]
 pub mod internal;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod measurements;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod measures;
 pub mod metrics;
 pub mod traits;
 pub mod transformations;
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod utilities;
 
 #[cfg(all(feature = "polars", feature = "contrib"))]

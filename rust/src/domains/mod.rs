@@ -179,9 +179,13 @@ impl<T: CheckAtom> Domain for AtomDomain<T> {
 /// `NaN(T)` is a marker that can only be constructed by values of `T` that may be NaN.
 ///
 /// The presence of nan in values of type `T` is indicated via the trait [`crate::traits::HasNaN`].
-#[derive(PartialEq)]
 pub struct NaN<T> {
     pub _marker: PhantomData<T>,
+}
+impl<T> PartialEq for NaN<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
 }
 #[cfg(creusot)]
 unit_deep_model!([T] NaN<T>);
@@ -215,10 +219,17 @@ impl<T: HasNull> NaN<T> {
 ///
 /// It is impossible to construct an instance of `Bounds` with inconsistent bounds.
 /// The constructors for this struct return an error if `lower > upper`, or if the bounds both exclude and include a value.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Bounds<T> {
     lower: Bound<T>,
     upper: Bound<T>,
+}
+impl<T: PartialEq> PartialEq for Bounds<T> {
+    // Trusted: the carrier `T` need not have a `DeepModel` (see below).
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    fn eq(&self, other: &Self) -> bool {
+        self.lower == other.lower && self.upper == other.upper
+    }
 }
 // The carrier `T` (e.g. `dashu::IBig`) need not have a `DeepModel`,
 // so the deep model of bounds is left uninterpreted.

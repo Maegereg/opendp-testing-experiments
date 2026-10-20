@@ -208,6 +208,7 @@ pub trait CanFloatSumOverflow: SumRelaxation {
 }
 
 impl<T: Float> CanFloatSumOverflow for Sequential<T> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn can_float_sum_overflow(size: usize, (lower, upper): (T, T)) -> Fallible<bool> {
         let _2 = T::one() + T::one();
         let size_ = T::inf_cast(size)?;
@@ -238,6 +239,7 @@ impl<T: Float> CanFloatSumOverflow for Sequential<T> {
 }
 
 impl<T: Float> CanFloatSumOverflow for Pairwise<T> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn can_float_sum_overflow(size: usize, (lower, upper): (T, T)) -> Fallible<bool> {
         let _2 = T::one() + T::one();
         let size_ = T::inf_cast(size)?;
@@ -267,6 +269,7 @@ impl<T: Float> CanFloatSumOverflow for Pairwise<T> {
     }
 }
 
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 fn round_up_to_nearest_power_of_two<T>(x: T) -> Fallible<T>
 where
     T: ExactIntCast<T::Bits> + Float,

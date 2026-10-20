@@ -30,6 +30,28 @@ pub trait MaybeDeepModel {}
 #[cfg(not(creusot))]
 impl<T: ?Sized> MaybeDeepModel for T {}
 
+/// A supertrait of [`Integer`](crate::traits::Integer) that, under Creusot,
+/// models each integer by the mathematical integer it represents. Empty otherwise.
+///
+/// This lets generic integer code compare values with `<`, `==`, etc.
+#[cfg(creusot)]
+#[doc(hidden)]
+pub trait MaybeIntModel:
+    creusot_std::model::DeepModel<DeepModelTy = creusot_std::logic::Int>
+{
+}
+#[cfg(creusot)]
+impl<T: creusot_std::model::DeepModel<DeepModelTy = creusot_std::logic::Int> + ?Sized> MaybeIntModel
+    for T
+{
+}
+
+#[cfg(not(creusot))]
+#[doc(hidden)]
+pub trait MaybeIntModel {}
+#[cfg(not(creusot))]
+impl<T: ?Sized> MaybeIntModel for T {}
+
 /// Gives a type whose `PartialEq` ignores all of its data (e.g. it only holds `PhantomData`)
 /// a trivial deep model, so that `==` is specified as always true.
 #[cfg(creusot)]
