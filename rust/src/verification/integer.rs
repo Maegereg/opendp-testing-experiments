@@ -4,7 +4,7 @@ use creusot_std::{
     prelude::*,
 };
 
-use super::dataset::sum;
+use super::dataset::{fsum, neg_part, pos_part, sum};
 use super::real_abs;
 use crate::traits::Integer;
 
@@ -275,4 +275,53 @@ pub fn monotone_sat_sum<T: Integer>(s: Seq<T>) {
             integer_range(such_that(|z: T| true))
         }
     }
+}
+
+/// The sum of the negative elements of `s`.
+#[logic(open)]
+#[variant(s.len())]
+pub fn isum_neg<T: Integer>(s: Seq<T>) -> Int {
+    pearlite! {
+        if s.len() == 0 { 0 } else {
+            isum_neg(s.subsequence(0, s.len() - 1))
+                + if s[s.len() - 1].deep_model() < 0 { s[s.len() - 1].deep_model() } else { 0 }
+        }
+    }
+}
+
+/// The sum of the positive elements of `s`.
+#[logic(open)]
+#[variant(s.len())]
+pub fn isum_pos<T: Integer>(s: Seq<T>) -> Int {
+    pearlite! {
+        if s.len() == 0 { 0 } else {
+            isum_pos(s.subsequence(0, s.len() - 1))
+                + if s[s.len() - 1].deep_model() > 0 { s[s.len() - 1].deep_model() } else { 0 }
+        }
+    }
+}
+
+/// The integer sums of the negative and positive parts are their real sums.
+#[logic]
+#[ensures(isum_neg(s) <= 0 && isum_pos(s) >= 0)]
+#[ensures(Real::from_int(isum_neg(s)) == fsum(reals(s), |v| neg_part(v)))]
+#[ensures(Real::from_int(isum_pos(s)) == fsum(reals(s), |v| pos_part(v)))]
+#[variant(s.len())]
+pub fn isum_parts_real<T: Integer>(s: Seq<T>) {
+    pearlite! {
+        if s.len() > 0 {
+            integer_real(s[s.len() - 1]);
+            let init = s.subsequence(0, s.len() - 1);
+            proof_assert!(reals(s).subsequence(0, s.len() - 1) == reals(init));
+            isum_parts_real(init)
+        }
+    }
+}
+
+/// Adding a value of the same sign to a clamped value is the same as clamping the exact total.
+#[logic]
+#[requires((a <= 0 && e <= 0) || (a >= 0 && e >= 0))]
+#[ensures(clamp::<T>(clamp::<T>(a) + e) == clamp::<T>(a + e))]
+pub fn clamp_step<T: Integer>(a: Int, e: Int) {
+    pearlite! { integer_range(such_that(|z: T| true)) }
 }

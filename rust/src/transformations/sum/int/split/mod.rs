@@ -1,50 +1,51 @@
-use std::cmp::Ordering;
-
 use opendp_derive::bootstrap;
 
+use super::split_saturating_sum;
+#[cfg(creusot)]
+use crate::verification::integer::{clamp, isum_neg, isum_pos};
 use crate::{
     core::{Function, StabilityMap, Transformation},
     domains::{AtomDomain, VectorDomain},
     error::Fallible,
     metrics::{AbsoluteDistance, IntDistance, SymmetricDistance},
-    traits::{Integer, SaturatingAdd},
+    traits::Integer,
 };
+#[cfg(creusot)]
+use creusot_std::{macros::ensures, model::DeepModel};
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
 
 #[doc(hidden)]
-pub trait SplitSatSum: Sized {
+pub trait SplitSatSum: Integer {
     /// Method which takes an iterator and generates `Self` from the elements by
     /// "summing up" the items.
     #[allow(clippy::ptr_arg)]
+    #[cfg_attr(creusot, ensures(result.deep_model()
+        == clamp::<Self>(clamp::<Self>(isum_neg(v@)) + clamp::<Self>(isum_pos(v@)))))]
     fn split_sat_sum(v: &Vec<Self>) -> Self;
 }
 
-macro_rules! impl_unsigned_int_split_sat_sum {
+// Unsigned integers have no negative elements, so this is the saturating sum.
+// Signed integers sum negative and positive elements separately,
+// so that saturation does not depend on the order of the elements.
+macro_rules! impl_int_split_sat_sum {
     ($($ty:ty)+) => ($(impl SplitSatSum for $ty {
+        #[cfg_attr(creusot, ensures(result.deep_model()
+            == clamp::<Self>(clamp::<Self>(isum_neg(v@)) + clamp::<Self>(isum_pos(v@)))))]
         fn split_sat_sum(v: &Vec<Self>) -> Self {
-            v.iter().fold(0, |sum, v| sum.saturating_add(*v))
-        }
-    })+);
-}
-macro_rules! impl___signed_int_split_sat_sum {
-    ($($ty:ty)+) => ($(impl SplitSatSum for $ty {
-        fn split_sat_sum(v: &Vec<Self>) -> Self {
-            let (neg, pos) = v.iter().fold((0, 0), |(neg, pos), v| {
-                match v.cmp(&0) {
-                    Ordering::Less => (neg.saturating_add(&v), pos),
-                    Ordering::Greater => (neg, pos.saturating_add(&v)),
-                    Ordering::Equal => (neg, pos),
-                }
-            });
-            neg.saturating_add(pos)
+            split_saturating_sum(v)
         }
     })+);
 }
 
-impl_unsigned_int_split_sat_sum! { u8 u16 u32 u64 u128 usize }
-impl___signed_int_split_sat_sum! { i8 i16 i32 i64 i128 isize }
+impl_int_split_sat_sum! { u8 u16 u32 u64 u128 usize }
+impl_int_split_sat_sum! { i8 i16 i32 i64 i128 isize }
 
 #[bootstrap(features("contrib"), generics(T(example = "$get_first(bounds)")))]
 /// Make a Transformation that computes the sum of bounded ints.
@@ -59,6 +60,7 @@ impl___signed_int_split_sat_sum! { i8 i16 i32 i64 i128 isize }
 ///
 /// # Generics
 /// * `T` - Atomic Input Type and Output Type
+#[cfg_attr(creusot, ensures(forall<t: IntSum<T>> result == Ok(t) ==> int_split_sum_contract(t, bounds)))]
 pub fn make_bounded_int_split_sum<T>(
     bounds: (T, T),
 ) -> Fallible<
@@ -72,7 +74,7 @@ pub fn make_bounded_int_split_sum<T>(
 where
     T: Integer + SplitSatSum,
 {
-    let (lower, upper) = bounds.clone();
+    let (lower, upper) = bounds;
 
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?),
@@ -100,6 +102,7 @@ where
 ///
 /// # Generics
 /// * `T` - Atomic Input Type and Output Type
+#[cfg_attr(creusot, ensures(forall<t: IntSum<T>> result == Ok(t) ==> sized_int_split_sum_contract(t, size, bounds)))]
 pub fn make_sized_bounded_int_split_sum<T>(
     size: usize,
     bounds: (T, T),
@@ -114,7 +117,7 @@ pub fn make_sized_bounded_int_split_sum<T>(
 where
     T: Integer + SplitSatSum,
 {
-    let (lower, upper) = bounds.clone();
+    let (lower, upper) = bounds;
     let range = upper.inf_sub(&lower)?;
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?).with_size(size),
@@ -125,7 +128,7 @@ where
         StabilityMap::new_fallible(
             // If d_in is odd, we still only consider databases with (d_in - 1) / 2 substitutions,
             //    so floor division is acceptable
-            move |d_in: &IntDistance| T::inf_cast(d_in / 2).and_then(|d_in| d_in.inf_mul(&range)),
+            move |d_in: &IntDistance| T::inf_cast(d_in / 2)?.inf_mul(&range),
         ),
     )
 }

@@ -10,13 +10,17 @@ pub use ordered::*;
 mod split;
 pub use split::*;
 
+use std::cmp::Ordering;
 use std::iter::Sum;
 
 use crate::error::Fallible;
 use crate::traits::Integer;
 #[cfg(creusot)]
 use crate::verification::{
-    integer::{integer_saturating_add, isum, prefix_sums_fit, sat_sum},
+    integer::{
+        clamp, clamp_step, integer_range, integer_saturating_add, isum, isum_neg, isum_parts_real,
+        isum_pos, prefix_sums_fit, sat_sum,
+    },
     real_abs,
 };
 #[cfg(creusot)]
@@ -83,4 +87,57 @@ pub(crate) fn saturating_sum<T: Integer>(arg: &Vec<T>) -> T {
     #[cfg(creusot)]
     proof_assert!(arg@.subsequence(0, arg@.len()) == arg@);
     sum
+}
+
+/// Sum the negative and the positive elements of `arg` separately with saturating arithmetic,
+/// then add the two sums with saturating arithmetic.
+///
+/// Since each partial sum only moves in one direction, saturation does not depend on the order
+/// of the elements.
+#[cfg_attr(creusot, ensures(result.deep_model()
+    == clamp::<T>(clamp::<T>(isum_neg(arg@)) + clamp::<T>(isum_pos(arg@)))))]
+pub(crate) fn split_saturating_sum<T: Integer>(arg: &Vec<T>) -> T {
+    let zero = int_zero::<T>();
+    let mut neg = int_zero::<T>();
+    let mut pos = int_zero::<T>();
+    let mut i = 0;
+    #[cfg(creusot)]
+    proof_assert!({
+        integer_range(neg);
+        true
+    });
+    #[cfg_attr(creusot, invariant(i@ <= arg@.len()))]
+    #[cfg_attr(creusot, invariant(neg.deep_model() == clamp::<T>(isum_neg(arg@.subsequence(0, i@)))))]
+    #[cfg_attr(creusot, invariant(pos.deep_model() == clamp::<T>(isum_pos(arg@.subsequence(0, i@)))))]
+    while i < arg.len() {
+        let v = arg[i];
+        #[cfg(creusot)]
+        proof_assert!(arg@.subsequence(0, i@ + 1).subsequence(0, i@) == arg@.subsequence(0, i@));
+        #[cfg(creusot)]
+        proof_assert!({ isum_parts_real(arg@.subsequence(0, i@)); true });
+        #[cfg(creusot)]
+        proof_assert!({
+            integer_saturating_add(neg, v);
+            integer_saturating_add(pos, v);
+            true
+        });
+        #[cfg(creusot)]
+        proof_assert!({ clamp_step::<T>(isum_neg(arg@.subsequence(0, i@)), v.deep_model()); true });
+        #[cfg(creusot)]
+        proof_assert!({ clamp_step::<T>(isum_pos(arg@.subsequence(0, i@)), v.deep_model()); true });
+        match v.cmp(&zero) {
+            Ordering::Less => neg = neg.saturating_add(&v),
+            Ordering::Greater => pos = pos.saturating_add(&v),
+            Ordering::Equal => (),
+        }
+        i += 1;
+    }
+    #[cfg(creusot)]
+    proof_assert!(arg@.subsequence(0, arg@.len()) == arg@);
+    #[cfg(creusot)]
+    proof_assert!({
+        integer_saturating_add(neg, pos);
+        true
+    });
+    neg.saturating_add(&pos)
 }

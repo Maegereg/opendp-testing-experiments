@@ -50,8 +50,7 @@ only a dependency under `cfg(creusot)`.
 | `make_sized_bounded_int_checked_sum` | Verified: contract, function defined on the domain, stability theorem. |
 | `make_(sized_)bounded_int_monotonic_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_int_ordered_sum` | Not started |
-| `make_(sized_)bounded_int_split_sum` | Not started |
-| `make_bounded_int_checked_sum` (unsized) | Not started |
+| `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_float_checked_sum` | Not started |
 | `make_(sized_)bounded_float_ordered_sum` | Not started |
 | `make_sum` (dispatch) | Not started |
@@ -89,3 +88,18 @@ and `d_in / 3` each make verification fail.
 
 Code changes (behavior unchanged): the saturating fold is the `saturating_sum` helper (an
 index loop, verified), `T::zero()` is the trusted `int_zero` wrapper, `?` replaces `and_then`.
+
+### `make_bounded_int_split_sum`, `make_sized_bounded_int_split_sum`
+
+Proved (`rust/src/transformations/sum/int/split/proof.rs`): the function is
+`clamp(clamp(N) + clamp(P))`, where `N` and `P` are the exact sums of the negative and positive
+parts, so the output moves by at most `|ΔN| + |ΔP|`. Under the symmetric distance this is at most
+`d_in * max(|lower|, upper)` (unsized), resp. `(d_in / 2) * (upper - lower)` (sized, by the
+identity `min(v, 0) + max(v, 0) = v` applied to the bounds).
+
+Mutation checks: `d_in / 3`, and summing signed integers with a single saturating fold (which is
+order-dependent) each make verification fail.
+
+Code changes (behavior unchanged): both `SplitSatSum` impls call the verified
+`split_saturating_sum` loop (for unsigned integers the negative sum is always zero), and
+`SplitSatSum` requires `Integer`, which all its implementors are.
