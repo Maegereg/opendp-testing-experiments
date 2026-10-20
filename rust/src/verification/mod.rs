@@ -56,6 +56,10 @@ impl<T: ?Sized> MaybeIntModel for T {}
 #[cfg(creusot)]
 pub mod dataset;
 
+/// Sums of integer datasets, and when they can be computed without overflow.
+#[cfg(creusot)]
+pub mod integer;
+
 /// The real number that a numeric value represents.
 ///
 /// The "Proof Definitions" of OpenDP's arithmetic traits are stated over the reals
@@ -80,29 +84,6 @@ impl<T: ?Sized> RealModel for T {}
 pub fn real_abs(x: creusot_std::logic::real::Real) -> creusot_std::logic::real::Real {
     use creusot_std::logic::real::Real;
     if x >= Real::from_int(0) { x } else { -x }
-}
-
-#[cfg(creusot)]
-use creusot_std::model::DeepModel;
-
-/// Facts about the values of every [`Integer`](crate::traits::Integer) type.
-///
-/// Trusted: generic code cannot see the integer type, but these hold for each of
-/// `u8`..`u128`, `usize`, `i8`..`i128` and `isize`, the only implementors of `Integer`:
-/// * `real` is the (mathematical) integer the value represents,
-/// * representable values form an interval of integers containing zero,
-/// * if the type has negative values, the negation of any non-negative value is representable.
-#[cfg(creusot)]
-#[creusot_std::macros::trusted]
-#[creusot_std::macros::logic(opaque)]
-#[creusot_std::macros::ensures(forall<x: T> x.real() == creusot_std::logic::real::Real::from_int(x.deep_model()))]
-#[creusot_std::macros::ensures(exists<z: T> z.deep_model() == 0)]
-#[creusot_std::macros::ensures(forall<x: T, y: T, p: creusot_std::logic::Int>
-    x.deep_model() <= p && p <= y.deep_model() ==> exists<z: T> z.deep_model() == p)]
-#[creusot_std::macros::ensures(forall<x: T, y: T> x.deep_model() < 0 && y.deep_model() >= 0
-    ==> exists<z: T> z.deep_model() == -y.deep_model())]
-pub fn integer_facts<T: crate::traits::Integer>() {
-    dead
 }
 
 #[cfg(creusot)]

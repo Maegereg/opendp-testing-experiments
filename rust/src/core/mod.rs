@@ -446,6 +446,10 @@ where
     (DI, MI): MetricSpace,
     (DO, MO): MetricSpace,
 {
+    #[cfg_attr(creusot, ensures(forall<t: Self> result == Ok(t) ==>
+        t.input_domain == input_domain && t.input_metric == input_metric
+        && t.output_domain == output_domain && t.output_metric == output_metric
+        && t.function == function && t.stability_map == stability_map))]
     pub fn new(
         input_domain: DI,
         input_metric: MI,
@@ -497,10 +501,13 @@ where
 }
 
 impl<DI: Domain, MI: Metric, DO: Domain, MO: Metric> Transformation<DI, MI, DO, MO> {
+    #[cfg_attr(creusot, requires(self.function.pre()[*arg]))]
+    #[cfg_attr(creusot, ensures(self.function.post()[*arg][result]))]
     pub fn invoke(&self, arg: &DI::Carrier) -> Fallible<DO::Carrier> {
         self.function.eval(arg)
     }
 
+    #[cfg_attr(creusot, ensures(self.stability_map.post()[*d_in][result]))]
     pub fn map(&self, d_in: &MI::Distance) -> Fallible<MO::Distance> {
         self.stability_map.eval(d_in)
     }

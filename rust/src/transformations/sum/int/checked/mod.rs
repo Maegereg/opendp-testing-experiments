@@ -2,7 +2,7 @@ use std::iter::Sum;
 
 use opendp_derive::bootstrap;
 
-use super::can_int_sum_overflow;
+use super::{can_int_sum_overflow, int_sum};
 use crate::{
     core::{Function, StabilityMap, Transformation},
     domains::{AtomDomain, VectorDomain},
@@ -10,6 +10,13 @@ use crate::{
     metrics::{AbsoluteDistance, IntDistance, SymmetricDistance},
     traits::Integer,
 };
+#[cfg(creusot)]
+use creusot_std::macros::ensures;
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
@@ -28,6 +35,7 @@ mod ffi;
 ///
 /// # Generics
 /// * `T` - Atomic Input Type and Output Type
+#[cfg_attr(creusot, ensures(forall<t: SizedIntSum<T>> result == Ok(t) ==> sized_int_checked_sum_contract(t, size, bounds)))]
 pub fn make_sized_bounded_int_checked_sum<T: Integer>(
     size: usize,
     bounds: (T, T),
@@ -42,25 +50,25 @@ pub fn make_sized_bounded_int_checked_sum<T: Integer>(
 where
     for<'a> T: Sum<&'a T>,
 {
-    if can_int_sum_overflow(size, bounds.clone()) {
+    if can_int_sum_overflow(size, bounds) {
         return fallible!(
             MakeTransformation,
             "potential for overflow when computing function. You could resolve this by choosing tighter clipping bounds or by using a data type with greater bit-depth."
         );
     }
 
-    let (lower, upper) = bounds.clone();
+    let (lower, upper) = bounds;
     let range = upper.inf_sub(&lower)?;
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?).with_size(size),
         SymmetricDistance,
         AtomDomain::default(),
         AbsoluteDistance::default(),
-        Function::new(|arg: &Vec<T>| arg.iter().sum()),
+        Function::new(|arg: &Vec<T>| int_sum(arg)),
         StabilityMap::new_fallible(
             // If d_in is odd, we still only consider databases with (d_in - 1) / 2 substitutions,
             //    so floor division is acceptable
-            move |d_in: &IntDistance| T::inf_cast(d_in / 2).and_then(|d_in| d_in.inf_mul(&range)),
+            move |d_in: &IntDistance| T::inf_cast(d_in / 2)?.inf_mul(&range),
         ),
     )
 }

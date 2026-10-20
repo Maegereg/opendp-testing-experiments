@@ -27,6 +27,9 @@ use std::ops::Bound;
 use crate::core::Domain;
 use crate::error::Fallible;
 use crate::traits::{CheckAtom, CheckNull, HasNull, ProductOrd};
+use crate::verification::RealModel;
+#[cfg(creusot)]
+use creusot_std::macros::{ensures, logic};
 use std::fmt::{Debug, Formatter};
 
 use bitvec::prelude::{BitVec, Lsb0};
@@ -145,8 +148,24 @@ impl<T: CheckAtom> AtomDomain<T> {
         }
     }
 }
+// Under Creusot, `AtomDomain` exposes a ghost model of its bounds
+// (`domains` is trusted, so these are constrained only by the constructors' contracts).
+#[cfg(creusot)]
+impl<T: CheckAtom> AtomDomain<T> {
+    /// Ghost model: `Some((lower, upper))` if the domain has closed bounds, inclusive.
+    #[logic(opaque)]
+    pub fn closed_bounds(self) -> Option<(T, T)> {
+        dead
+    }
+}
+
 impl<T: CheckAtom + PartialOrd + Debug> AtomDomain<T> {
-    pub fn new_closed(bounds: (T, T)) -> Fallible<Self> {
+    #[cfg_attr(creusot, ensures(forall<d: Self> result == Ok(d) ==>
+        d.closed_bounds() == Some(bounds) && bounds.0.real() <= bounds.1.real()))]
+    pub fn new_closed(bounds: (T, T)) -> Fallible<Self>
+    where
+        T: RealModel,
+    {
         Ok(AtomDomain {
             bounds: Some(Bounds::new_closed(bounds)?),
             nan: false,
@@ -478,12 +497,14 @@ impl<D: Domain + Default> Default for VectorDomain<D> {
     }
 }
 impl<D: Domain> VectorDomain<D> {
+    #[cfg_attr(creusot, ensures(result.element_domain == element_domain && result.size == None))]
     pub fn new(element_domain: D) -> Self {
         VectorDomain {
             element_domain,
             size: None,
         }
     }
+    #[cfg_attr(creusot, ensures(result.element_domain == self.element_domain && result.size == Some(size)))]
     pub fn with_size(mut self, size: usize) -> Self {
         self.size = Some(size);
         self
