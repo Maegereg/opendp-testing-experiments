@@ -11,6 +11,9 @@ use crate::domains::Bounds;
 use crate::error::Fallible;
 #[cfg(feature = "contrib")]
 use crate::interactive::Queryable;
+use crate::verification::RealModel;
+#[cfg(creusot)]
+use creusot_std::macros::ensures;
 
 use super::ExactIntCast;
 
@@ -68,7 +71,7 @@ pub trait HasNull: CheckNull {
 /// The framework provides a way to ensure values are non-null at runtime.
 /// This trait should only be used when the framework can rely on these assurances.
 /// ProductOrd shares the same interface as Ord, but with a total_ prefix on methods
-pub trait ProductOrd: Sized {
+pub trait ProductOrd: Sized + RealModel {
     /// # Proof Definition
     /// For any two values `self` and `other` of type `Self`, returns `Ok(out)` or `Err(e)`.
     /// The implementation returns `Err(e)` if either `self` or `other` are null.
@@ -79,6 +82,8 @@ pub trait ProductOrd: Sized {
     /// For any two values `self` and `other` of type `Self`, returns `Ok(out)` or `Err(e)`.
     /// The implementation returns `Err(e)` if either `self` or `other` are null.
     /// Otherwise returns `Some(out)` where `out` is the greater of `self` and `other` as defined by [`PartialOrd`].
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+        (out == self || out == other) && self.real() <= out.real() && other.real() <= out.real()))]
     fn total_max(self, other: Self) -> Fallible<Self> {
         max_by(self, other, ProductOrd::total_cmp)
     }
@@ -146,6 +151,7 @@ pub trait FloatBits: Copy + Sized + ExactIntCast<Self::Bits> {
     /// # Proof Definition
     /// An associated type that captures the bit representation of Self.
     type Bits: Copy
+        + RealModel
         + One
         + Zero
         + Eq

@@ -1,9 +1,14 @@
 use std::ops::{Add, Div, Mul, Sub};
 
+#[cfg(creusot)]
+use crate::verification::real_abs;
 use crate::{
     error::Fallible,
     traits::{ExactIntCast, InfCast},
+    verification::RealModel,
 };
+#[cfg(creusot)]
+use creusot_std::macros::{ensures, trusted};
 use dashu::{
     float::{
         FBig,
@@ -34,9 +39,10 @@ fn catch_unwind_silent<R>(f: impl FnOnce() -> R + panic::UnwindSafe) -> std::thr
 /// use opendp::traits::AlertingAbs;
 /// assert!(i8::MIN.alerting_abs().is_err());
 /// ```
-pub trait AlertingAbs: Sized {
+pub trait AlertingAbs: Sized + RealModel {
     /// # Proof Definition
     /// For any `self` of type `Self`, returns `Ok(out)` where $out = |self|$ or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() == real_abs(self.real())))]
     fn alerting_abs(&self) -> Fallible<Self>;
 }
 
@@ -222,48 +228,54 @@ pub trait InfPowI: Sized + AlertingPow {
 /// Fallible addition with specified rounding.
 ///
 /// Throws an error if the ideal output is not finite or representable.
-pub trait InfAdd: Sized + AlertingAdd {
+pub trait InfAdd: Sized + AlertingAdd + RealModel {
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.inf_add(v)` either returns `Ok(out)`,
     /// where $out \ge self + v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() + v.real()))]
     fn inf_add(&self, v: &Self) -> Fallible<Self>;
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.neg_inf_add(v)` either returns `Ok(out)`,
     /// where $out \le self + v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() + v.real()))]
     fn neg_inf_add(&self, v: &Self) -> Fallible<Self>;
 }
 
 /// Fallible subtraction with specified rounding.
 ///
 /// Throws an error if the ideal output is not finite or representable.
-pub trait InfSub: Sized + AlertingSub {
+pub trait InfSub: Sized + AlertingSub + RealModel {
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.inf_sub(v)` either returns `Ok(out)`,
     /// where $out \ge self - v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() - v.real()))]
     fn inf_sub(&self, v: &Self) -> Fallible<Self>;
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.neg_inf_sub(v)` either returns `Ok(out)`,
     /// where $out \le self - v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() - v.real()))]
     fn neg_inf_sub(&self, v: &Self) -> Fallible<Self>;
 }
 
 /// Fallible multiplication with specified rounding.
 ///
 /// Throws an error if the ideal output is not finite or representable.
-pub trait InfMul: Sized + AlertingMul {
+pub trait InfMul: Sized + AlertingMul + RealModel {
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.inf_mul(v)` either returns `Ok(out)`,
     /// where $out \ge self \cdot v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() * v.real()))]
     fn inf_mul(&self, v: &Self) -> Fallible<Self>;
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.neg_inf_mul(v)` either returns `Ok(out)`,
     /// where $out \le self \cdot v$, or `Err(e)`.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() * v.real()))]
     fn neg_inf_mul(&self, v: &Self) -> Fallible<Self>;
 }
 
@@ -319,6 +331,9 @@ pub trait InfLn1P: Sized {
 // TRAIT AlertingAbs
 macro_rules! impl_alerting_abs_signed_int {
     ($($ty:ty),+) => ($(impl AlertingAbs for $ty {
+        // Trusted: creusot-std has no specification for `checked_abs`.
+        #[cfg_attr(creusot, trusted)]
+        #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() == real_abs(self.real())))]
         fn alerting_abs(&self) -> Fallible<Self> {
             self.checked_abs().ok_or_else(|| err!(Overflow,
                 "the corresponding positive value for {} is out of range", self))
@@ -328,6 +343,7 @@ macro_rules! impl_alerting_abs_signed_int {
 impl_alerting_abs_signed_int!(i8, i16, i32, i64, i128, isize);
 macro_rules! impl_alerting_abs_unsigned_int {
     ($($ty:ty),+) => ($(impl AlertingAbs for $ty {
+        #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() == real_abs(self.real())))]
         fn alerting_abs(&self) -> Fallible<Self> {
             Ok(*self)
         }
@@ -336,6 +352,8 @@ macro_rules! impl_alerting_abs_unsigned_int {
 impl_alerting_abs_unsigned_int!(u8, u16, u32, u64, u128, usize);
 macro_rules! impl_alerting_abs_float {
     ($($ty:ty),+) => ($(impl AlertingAbs for $ty {
+        #[cfg_attr(creusot, trusted)]
+        #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() == real_abs(self.real())))]
         fn alerting_abs(&self) -> Fallible<Self> {
             Ok(self.abs())
         }
@@ -360,6 +378,7 @@ macro_rules! impl_alerting_int {
         })+
         $(impl AlertingMul for $t {
             #[inline]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out@ == self@ * v@))]
             fn alerting_mul(&self, v: &Self) -> Fallible<Self> {
                 <$t>::checked_mul(*self, *v).ok_or_else(|| err!(
                     Overflow,
@@ -378,6 +397,7 @@ macro_rules! impl_alerting_int {
         })+
         $(impl AlertingAdd for $t {
             #[inline]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out@ == self@ + v@))]
             fn alerting_add(&self, v: &Self) -> Fallible<Self> {
                 <$t>::checked_add(*self, *v).ok_or_else(|| err!(
                     Overflow,
@@ -387,6 +407,7 @@ macro_rules! impl_alerting_int {
         })+
         $(impl AlertingSub for $t {
             #[inline]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out@ == self@ - v@))]
             fn alerting_sub(&self, v: &Self) -> Fallible<Self> {
                 <$t>::checked_sub(*self, *v).ok_or_else(|| err!(
                     Overflow,
@@ -397,6 +418,8 @@ macro_rules! impl_alerting_int {
 
         $(impl AlertingPow for $t {
             #[inline]
+            // Trusted: creusot-std has no specification for `checked_pow`.
+            #[cfg_attr(creusot, trusted)]
             fn alerting_pow(&self, p: &Self) -> Fallible<Self> {
                 let p = u32::exact_int_cast(*p)?;
                 <$t>::checked_pow(*self, p).ok_or_else(|| err!(
@@ -413,16 +436,19 @@ impl_alerting_int!(
 macro_rules! impl_alerting_float {
     ($($t:ty),+) => {
         $(impl SaturatingAdd for $t {
+            #[cfg_attr(creusot, trusted)]
             fn saturating_add(&self, v: &Self) -> Self {
                 (self + v).clamp(<$t>::MIN, <$t>::MAX)
             }
         })+
         $(impl SaturatingMul for $t {
+            #[cfg_attr(creusot, trusted)]
             fn saturating_mul(&self, v: &Self) -> Self {
                 (self * v).clamp(<$t>::MIN, <$t>::MAX)
             }
         })+
         $(impl AlertingMul for $t {
+            #[cfg_attr(creusot, trusted)]
             fn alerting_mul(&self, v: &Self) -> Fallible<Self> {
                 let y = self * v;
                 y.is_finite().then(|| y).ok_or_else(|| err!(
@@ -432,6 +458,7 @@ macro_rules! impl_alerting_float {
             }
         })+
         $(impl AlertingDiv for $t {
+            #[cfg_attr(creusot, trusted)]
             fn alerting_div(&self, v: &Self) -> Fallible<Self> {
                 let y = self / v;
                 y.is_finite().then(|| y).ok_or_else(|| err!(
@@ -441,6 +468,7 @@ macro_rules! impl_alerting_float {
             }
         })+
         $(impl AlertingAdd for $t {
+            #[cfg_attr(creusot, trusted)]
             fn alerting_add(&self, v: &Self) -> Fallible<Self> {
                 let y = self + v;
                 y.is_finite().then(|| y).ok_or_else(|| err!(
@@ -450,6 +478,7 @@ macro_rules! impl_alerting_float {
             }
         })+
         $(impl AlertingSub for $t {
+            #[cfg_attr(creusot, trusted)]
             fn alerting_sub(&self, v: &Self) -> Fallible<Self> {
                 let y = self - v;
                 y.is_finite().then(|| y).ok_or_else(|| err!(
@@ -459,6 +488,7 @@ macro_rules! impl_alerting_float {
             }
         })+
         $(impl AlertingPow for $t {
+            #[cfg_attr(creusot, trusted)]
             fn alerting_pow(&self, v: &Self) -> Fallible<Self> {
                 let y = self.powf(*v);
                 y.is_finite().then(|| y).ok_or_else(|| err!(
@@ -476,6 +506,7 @@ macro_rules! impl_float_inf_uni {
     ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident) => {
         $(
         impl $name for $ty {
+            #[cfg_attr(creusot, trusted)]
             fn $method_inf(self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -491,6 +522,7 @@ macro_rules! impl_float_inf_uni {
                 let output = Self::inf_cast(output)?;
                 output.is_finite().then(|| output).ok_or_else(not_finite)
             }
+            #[cfg_attr(creusot, trusted)]
             fn $method_neg_inf(self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -518,26 +550,34 @@ impl_float_inf_uni!(f64, f32; InfExpM1, inf_exp_m1, neg_inf_exp_m1, exp_m1);
 
 // TRAIT InfAdd, InfSub, InfMul, InfDiv (bivariate)
 macro_rules! impl_int_inf {
-    ($ty:ty, $name:ident, $method_inf:ident, $method_neg_inf:ident, $func:ident) =>
+    ($ty:ty, $name:ident, $method_inf:ident, $method_neg_inf:ident, $func:ident, $sym:tt) =>
         (impl $name for $ty {
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() $sym other.real()))]
             fn $method_inf(&self, other: &Self) -> Fallible<Self> {
                 self.$func(other)
             }
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() $sym other.real()))]
             fn $method_neg_inf(&self, other: &Self) -> Fallible<Self> {
                 self.$func(other)
             }
         });
     ($($ty:ty),+) => {
-        $(impl_int_inf!{$ty, InfAdd, inf_add, neg_inf_add, alerting_add})+
-        $(impl_int_inf!{$ty, InfSub, inf_sub, neg_inf_sub, alerting_sub})+
-        $(impl_int_inf!{$ty, InfMul, inf_mul, neg_inf_mul, alerting_mul})+
+        $(impl_int_inf!{$ty, InfAdd, inf_add, neg_inf_add, alerting_add, +})+
+        $(impl_int_inf!{$ty, InfSub, inf_sub, neg_inf_sub, alerting_sub, -})+
+        $(impl_int_inf!{$ty, InfMul, inf_mul, neg_inf_mul, alerting_mul, *})+
         $(impl InfDiv for $ty {
+            // Trusted: `num::Integer::div_ceil` has no specification.
+            // Note: for signed types, `MIN.inf_div(&-1)` panics with "attempt to divide with overflow".
+            #[cfg_attr(creusot, trusted)]
             fn inf_div(&self, other: &Self) -> Fallible<Self> {
                 if other == &0 {
                     return fallible!(Overflow, "attempt to divide by zero");
                 }
                 Ok(num::Integer::div_ceil(self, other))
             }
+            // Trusted: `num::Integer::div_floor` has no specification.
+            // Note: for signed types, `MIN.neg_inf_div(&-1)` panics with "attempt to divide with overflow".
+            #[cfg_attr(creusot, trusted)]
             fn neg_inf_div(&self, other: &Self) -> Fallible<Self> {
                 if other == &0 {
                     return fallible!(Overflow, "attempt to divide by zero");
@@ -552,8 +592,10 @@ impl_int_inf!(
 );
 
 macro_rules! impl_float_inf_bi {
-    ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident) => {
+    ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident, $sym:tt) => {
         $(impl $name for $ty {
+            #[cfg_attr(creusot, trusted)]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() $sym other.real()))]
             fn $method_inf(&self, other: &Self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -570,6 +612,8 @@ macro_rules! impl_float_inf_bi {
                 let output = Self::inf_cast(output)?;
                 output.is_finite().then(|| output).ok_or_else(not_finite)
             }
+            #[cfg_attr(creusot, trusted)]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() $sym other.real()))]
             fn $method_neg_inf(&self, other: &Self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -589,14 +633,15 @@ macro_rules! impl_float_inf_bi {
         })+
     }
 }
-impl_float_inf_bi!(f64, f32; InfAdd, inf_add, neg_inf_add, add);
-impl_float_inf_bi!(f64, f32; InfSub, inf_sub, neg_inf_sub, sub);
-impl_float_inf_bi!(f64, f32; InfMul, inf_mul, neg_inf_mul, mul);
-impl_float_inf_bi!(f64, f32; InfDiv, inf_div, neg_inf_div, div);
+impl_float_inf_bi!(f64, f32; InfAdd, inf_add, neg_inf_add, add, +);
+impl_float_inf_bi!(f64, f32; InfSub, inf_sub, neg_inf_sub, sub, -);
+impl_float_inf_bi!(f64, f32; InfMul, inf_mul, neg_inf_mul, mul, *);
+impl_float_inf_bi!(f64, f32; InfDiv, inf_div, neg_inf_div, div, /);
 
 macro_rules! impl_float_inf_bi_ibig {
     ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident) => {
         $(impl $name for $ty {
+            #[cfg_attr(creusot, trusted)]
             fn $method_inf(&self, other: IBig) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -612,6 +657,7 @@ macro_rules! impl_float_inf_bi_ibig {
                 let output = Self::inf_cast(output)?;
                 output.is_finite().then(|| output).ok_or_else(not_finite)
             }
+            #[cfg_attr(creusot, trusted)]
             fn $method_neg_inf(&self, other: IBig) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,

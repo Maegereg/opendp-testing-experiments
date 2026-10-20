@@ -15,16 +15,20 @@ use dashu::{
 use num::{NumCast, One, Zero};
 
 use crate::error::Fallible;
+use crate::verification::RealModel;
+#[cfg(creusot)]
+use creusot_std::macros::ensures;
 
 // general overview of casters:
 // https://docs.google.com/spreadsheets/d/1DJohiOI3EVHjwj8g4IEdFZVf7MMyFk_4oaSyjTfkO_0/edit?usp=sharing
 
 /// Fallible casting where the casted value is exactly equal to the original value.
-pub trait ExactIntCast<TI>: Sized + ExactIntBounds {
+pub trait ExactIntCast<TI: RealModel>: Sized + ExactIntBounds + RealModel {
     /// # Proof Definition
     /// For any `v` of type `TI`, `Self::exact_int_cast(value)` either
     /// returns `Err(e)` if `v` is smaller than `Self::MIN_CONSECUTIVE` or greater than `Self::MAX_CONSECUTIVE`,
     /// or `Ok(out)` where $out = v$.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() == v.real()))]
     fn exact_int_cast(v: TI) -> Fallible<Self>;
 }
 
@@ -45,14 +49,16 @@ pub trait ExactIntBounds {
 ///
 /// This preserves the invariant that the casted value is gte the original value.
 /// For example, casting a 128_u8 to i8 doesn't saturate to i8::MAX (127), it errors.
-pub trait InfCast<TI>: Sized {
+pub trait InfCast<TI: RealModel>: Sized + RealModel {
     /// # Proof Definition
     /// For any `v` of type `TI`, `Self::inf_cast(value)` either returns `Err(e)`,
     /// or `Ok(out)` where $out \ge v$.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= v.real()))]
     fn inf_cast(v: TI) -> Fallible<Self>;
     /// # Proof Definition
     /// For any `v` of type `TI`, `Self::inf_cast(value)` either returns `Err(e)`,
     /// or `Ok(out)` where $out \le v$.
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= v.real()))]
     fn neg_inf_cast(v: TI) -> Fallible<Self>;
 }
 

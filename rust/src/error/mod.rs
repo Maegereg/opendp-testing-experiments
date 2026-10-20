@@ -17,6 +17,7 @@ macro_rules! fallible {
 }
 // "error" is shadowed, and breaks intellij macro resolution
 /// Create an instance of [`Error`]
+#[cfg(not(creusot))]
 #[macro_export]
 macro_rules! err {
     // error without message
@@ -39,6 +40,19 @@ macro_rules! err {
     });
 
     (@backtrace) => (std::backtrace::Backtrace::capture());
+}
+
+/// Under Creusot, errors are built by a trusted constructor that keeps only the variant:
+/// message formatting and backtrace capture call into `std` code that Creusot cannot translate.
+#[cfg(creusot)]
+#[macro_export]
+macro_rules! err {
+    (@backtrace) => {
+        std::backtrace::Backtrace::capture()
+    };
+    ($variant:ident $(, $($_rest:tt)*)?) => {
+        $crate::error::Error::verified_new($crate::error::ErrorVariant::$variant)
+    };
 }
 
 #[derive(thiserror::Error)]
@@ -147,6 +161,19 @@ impl fmt::Display for Error {
 impl From<Error> for PolarsError {
     fn from(value: Error) -> Self {
         PolarsError::ComputeError(value.to_string().into())
+    }
+}
+
+#[cfg(creusot)]
+impl Error {
+    #[creusot_std::macros::trusted]
+    #[creusot_std::macros::ensures(result.variant == variant)]
+    pub fn verified_new(variant: ErrorVariant) -> Self {
+        Self {
+            variant,
+            message: None,
+            backtrace: std::backtrace::Backtrace::capture(),
+        }
     }
 }
 

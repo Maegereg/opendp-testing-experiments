@@ -31,7 +31,7 @@ use std::sync::Arc;
 use crate::error::*;
 use crate::interactive::Queryable;
 use crate::traits::{DistanceConstant, InfCast, InfMul, ProductOrd};
-use crate::verification::MaybeDeepModel;
+use crate::verification::{MaybeDeepModel, RealModel};
 #[cfg(creusot)]
 use creusot_std::{
     logic::Mapping,
@@ -201,7 +201,7 @@ impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
     #[cfg_attr(creusot, trusted)]
     pub fn new_from_constant(c: MO::Distance) -> Self
     where
-        MI::Distance: Clone,
+        MI::Distance: Clone + RealModel,
         MO::Distance: DistanceConstant<MI::Distance> + Display,
     {
         PrivacyMap::new_fallible(move |d_in: &MI::Distance| {
@@ -282,7 +282,7 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
     #[cfg_attr(creusot, trusted)]
     pub fn new_from_constant(c: MO::Distance) -> Self
     where
-        MI::Distance: Clone,
+        MI::Distance: Clone + RealModel,
         MO::Distance: DistanceConstant<MI::Distance> + Display,
     {
         StabilityMap::new_fallible(move |d_in: &MI::Distance| {

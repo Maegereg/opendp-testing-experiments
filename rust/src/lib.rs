@@ -182,6 +182,7 @@ pub mod ffi;
 extern crate lazy_static;
 
 #[macro_use]
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod error;
 
 #[cfg_attr(creusot, creusot_std::macros::trusted)]

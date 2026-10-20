@@ -1,7 +1,7 @@
 //! Traits that enable building stable and private algorithms.
 
 use crate::metrics::IntDistance;
-use crate::verification::MaybeIntModel;
+use crate::verification::{MaybeIntModel, RealModel};
 use num::{NumCast, One, Zero};
 use std::hash::Hash;
 use std::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
@@ -52,12 +52,12 @@ pub mod samplers;
 /// // same thing, but annotate types in a different way
 /// assert_eq!(example_map::<f32, i8>(3.14159, 2).ok(), Some(8));
 /// ```
-pub trait DistanceConstant<TI>:
+pub trait DistanceConstant<TI: RealModel>:
     'static + InfCast<TI> + InfMul + ProductOrd + PartialOrd + Zero + Send + Sync
 {
 }
 
-impl<TI, TO> DistanceConstant<TI> for TO where
+impl<TI: RealModel, TO> DistanceConstant<TI> for TO where
     TO: 'static + InfCast<TI> + InfMul + ProductOrd + PartialOrd + Zero + Send + Sync
 {
 }
