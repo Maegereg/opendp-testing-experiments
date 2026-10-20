@@ -49,7 +49,7 @@ only a dependency under `cfg(creusot)`.
 | --- | --- |
 | `make_sized_bounded_int_checked_sum` | Verified: contract, function defined on the domain, stability theorem. |
 | `make_(sized_)bounded_int_monotonic_sum` | Verified: contracts and stability theorems (sized and unsized). |
-| `make_(sized_)bounded_int_ordered_sum` | Not started |
+| `make_(sized_)bounded_int_ordered_sum` | Verified: contracts and stability theorems (sized and unsized), under the insert-delete distance. |
 | `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_float_checked_sum` | Not started |
 | `make_(sized_)bounded_float_ordered_sum` | Not started |
@@ -103,3 +103,20 @@ order-dependent) each make verification fail.
 Code changes (behavior unchanged): both `SplitSatSum` impls call the verified
 `split_saturating_sum` loop (for unsigned integers the negative sum is always zero), and
 `SplitSatSum` requires `Integer`, which all its implementors are.
+
+### `make_bounded_int_ordered_sum`, `make_sized_bounded_int_ordered_sum`
+
+Proved (`rust/src/transformations/sum/int/ordered/proof.rs`, `rust/src/verification/ordered.rs`):
+the function is the left-to-right saturating sum, with elements of either sign. The
+insert-delete distance is modeled by a common subsequence `z` of `x` and `y`, with deleted
+elements `dx` and `dy`. Deleting `dx` moves the saturating sum by between the sums of the negative
+and positive parts of `dx` (each deletion of `e` moves a clamped value by between `min(e, 0)` and
+`max(e, 0)`, and each kept element preserves that interval). This gives `d_in * max(|lower|, upper)`
+(unsized), and with equal sizes `(d_in / 2) * (upper - lower)`: directly when
+`lower <= 0 <= upper`, and via the clamped exact sum when the bounds share a sign.
+
+A brute-force search over small types first found no counterexample to the sized map, whose
+justification is less obvious than the others (saturation is order-dependent).
+
+Mutation checks: `d_in / 3`, and a map of `d_in * upper` (ignoring `|lower|`), each make
+verification fail.

@@ -1,5 +1,6 @@
 use opendp_derive::bootstrap;
 
+use super::saturating_sum;
 use crate::{
     core::{Function, StabilityMap, Transformation},
     domains::{AtomDomain, VectorDomain},
@@ -7,6 +8,13 @@ use crate::{
     metrics::{AbsoluteDistance, InsertDeleteDistance, IntDistance},
     traits::Integer,
 };
+#[cfg(creusot)]
+use creusot_std::macros::ensures;
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
@@ -24,6 +32,7 @@ mod ffi;
 ///
 /// # Generics
 /// * `T` - Atomic Input Type and Output Type
+#[cfg_attr(creusot, ensures(forall<t: OrderedIntSum<T>> result == Ok(t) ==> int_ordered_sum_contract(t, bounds)))]
 pub fn make_bounded_int_ordered_sum<T>(
     bounds: (T, T),
 ) -> Fallible<
@@ -37,13 +46,13 @@ pub fn make_bounded_int_ordered_sum<T>(
 where
     T: Integer,
 {
-    let (lower, upper) = bounds.clone();
+    let (lower, upper) = bounds;
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?),
         InsertDeleteDistance,
         AtomDomain::default(),
         AbsoluteDistance::default(),
-        Function::new(|arg: &Vec<T>| arg.iter().fold(T::zero(), |sum, v| sum.saturating_add(v))),
+        Function::new(|arg: &Vec<T>| saturating_sum(arg)),
         StabilityMap::new_from_constant(lower.alerting_abs()?.total_max(upper)?),
     )
 }
@@ -64,6 +73,7 @@ where
 ///
 /// # Generics
 /// * `T` - Atomic Input Type and Output Type
+#[cfg_attr(creusot, ensures(forall<t: OrderedIntSum<T>> result == Ok(t) ==> sized_int_ordered_sum_contract(t, size, bounds)))]
 pub fn make_sized_bounded_int_ordered_sum<T>(
     size: usize,
     bounds: (T, T),
@@ -78,18 +88,18 @@ pub fn make_sized_bounded_int_ordered_sum<T>(
 where
     T: Integer,
 {
-    let (lower, upper) = bounds.clone();
+    let (lower, upper) = bounds;
     let range = upper.inf_sub(&lower)?;
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?).with_size(size),
         InsertDeleteDistance,
         AtomDomain::default(),
         AbsoluteDistance::default(),
-        Function::new(|arg: &Vec<T>| arg.iter().fold(T::zero(), |sum, v| sum.saturating_add(v))),
+        Function::new(|arg: &Vec<T>| saturating_sum(arg)),
         StabilityMap::new_fallible(
             // If d_in is odd, we still only consider databases with (d_in - 1) / 2 substitutions,
             //    so floor division is acceptable
-            move |d_in: &IntDistance| T::inf_cast(d_in / 2).and_then(|d_in| d_in.inf_mul(&range)),
+            move |d_in: &IntDistance| T::inf_cast(d_in / 2)?.inf_mul(&range),
         ),
     )
 }

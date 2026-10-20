@@ -60,6 +60,10 @@ pub mod dataset;
 #[cfg(creusot)]
 pub mod integer;
 
+/// Ordered datasets, the insert-delete distance, and saturating sums.
+#[cfg(creusot)]
+pub mod ordered;
+
 /// The real number that a numeric value represents.
 ///
 /// The "Proof Definitions" of OpenDP's arithmetic traits are stated over the reals
