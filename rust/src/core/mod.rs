@@ -34,7 +34,7 @@ use crate::traits::{DistanceConstant, InfCast, InfMul, ProductOrd};
 use crate::verification::{MaybeDeepModel, RealModel};
 #[cfg(creusot)]
 use creusot_std::{
-    logic::Mapping,
+    logic::{Mapping, real::Real},
     macros::{ensures, logic, requires, trusted},
     std::ops::{FnExt, FnOnceExt},
 };
@@ -279,7 +279,10 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
     /// Creates a stability map from `d_in` to `d_out`
     /// where `d_out = MO.inf_cast(d_in).inf_mul(c) >= d_in * c`,
     /// or returns an error.
+    // Trusted: compares the generic distance `c` with zero.
     #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, o: MO::Distance>
+        result.post()[d][Ok(o)] ==> c.real() >= Real::from_int(0) && o.real() >= d.real() * c.real()))]
     pub fn new_from_constant(c: MO::Distance) -> Self
     where
         MI::Distance: Clone + RealModel,

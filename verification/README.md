@@ -48,7 +48,7 @@ only a dependency under `cfg(creusot)`.
 | Constructor | Status |
 | --- | --- |
 | `make_sized_bounded_int_checked_sum` | Verified: contract, function defined on the domain, stability theorem. |
-| `make_(sized_)bounded_int_monotonic_sum` | Not started |
+| `make_(sized_)bounded_int_monotonic_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_int_ordered_sum` | Not started |
 | `make_(sized_)bounded_int_split_sum` | Not started |
 | `make_bounded_int_checked_sum` (unsized) | Not started |
@@ -75,3 +75,17 @@ claiming a tighter bound each make verification fail.
 Code changes needed (behavior unchanged): the function calls `int_sum` (a trusted wrapper of
 `iter().sum()`), the stability map uses `?` instead of `and_then`, and `bounds` is no longer
 cloned (it is `Copy`).
+
+### `make_bounded_int_monotonic_sum`, `make_sized_bounded_int_monotonic_sum`
+
+Proved (`rust/src/transformations/sum/int/monotonic/proof.rs`): the constructors meet their
+contracts (bounds share a sign; the function returns the saturating sum; the map returns at least
+`d_in * max(|lower|, upper)`, resp. `(d_in / 2) * (upper - lower)`), and both are stable. The
+saturating sum of same-sign elements is the clamped exact sum, and clamping is 1-Lipschitz.
+
+Mutation checks: removing the sign check, dropping sign agreement from the contract (the
+stability proof then fails, as order-dependent saturation breaks symmetric-distance stability),
+and `d_in / 3` each make verification fail.
+
+Code changes (behavior unchanged): the saturating fold is the `saturating_sum` helper (an
+index loop, verified), `T::zero()` is the trusted `int_zero` wrapper, `?` replaces `and_then`.

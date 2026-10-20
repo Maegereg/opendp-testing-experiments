@@ -215,3 +215,30 @@ pub fn sized_sum_sensitivity(x: Seq<Real>, y: Seq<Real>, d: Int, lo: Real, hi: R
         proof_assert!(Real::from_int(a.len()) * (hi - lo) <= Real::from_int(d / 2) * (hi - lo))
     }
 }
+
+/// The sensitivity of the sum of a bounded dataset of unknown size under the symmetric distance.
+#[logic]
+#[requires(sym_close(x, y, d))]
+#[requires(d >= 0)]
+#[requires(forall<i> 0 <= i && i < x.len() ==> lo <= x[i] && x[i] <= hi)]
+#[requires(forall<i> 0 <= i && i < y.len() ==> lo <= y[i] && y[i] <= hi)]
+#[requires(mag >= lo && mag >= -lo && mag >= hi && mag >= -hi)]
+#[ensures(sum(x) - sum(y) <= Real::from_int(d) * mag)]
+#[ensures(sum(y) - sum(x) <= Real::from_int(d) * mag)]
+pub fn unsized_sum_sensitivity(x: Seq<Real>, y: Seq<Real>, d: Int, lo: Real, hi: Real, mag: Real) {
+    pearlite! {
+        let (c, a, b) = such_that(|t: (Seq<Real>, Seq<Real>, Seq<Real>)|
+            same(x, t.0.concat(t.1)) && same(y, t.0.concat(t.2)) && t.1.len() + t.2.len() <= d);
+        same_sum(x, c.concat(a));
+        same_sum(y, c.concat(b));
+        sum_concat(c, a);
+        sum_concat(c, b);
+        sub_bounded_upto(x, c, a, lo, hi, a.len());
+        sub_bounded_upto(y, c, b, lo, hi, b.len());
+        sum_bounds(a, -mag, mag);
+        sum_bounds(b, -mag, mag);
+        proof_assert!(sum(x) - sum(y) == sum(a) - sum(b));
+        proof_assert!(Real::from_int(a.len()) + Real::from_int(b.len()) <= Real::from_int(d));
+        proof_assert!((Real::from_int(a.len()) + Real::from_int(b.len())) * mag <= Real::from_int(d) * mag)
+    }
+}

@@ -190,3 +190,89 @@ pub fn real_bounds<T: Integer>(s: Seq<T>, lo: T, hi: T, k: Int) {
         }
     }
 }
+
+// The range of an `Integer` type. Trusted facts, as above.
+
+/// The smallest value of `T`.
+#[logic(opaque)]
+pub fn int_min<T: Integer>() -> Int {
+    dead
+}
+
+/// The largest value of `T`.
+#[logic(opaque)]
+pub fn int_max<T: Integer>() -> Int {
+    dead
+}
+
+/// Every value of `T` lies within its range, which contains zero,
+/// and a signed range is at least as large below zero as above.
+#[trusted]
+#[logic(opaque)]
+#[ensures(int_min::<T>() <= x.deep_model() && x.deep_model() <= int_max::<T>())]
+#[ensures(int_min::<T>() <= 0 && 0 <= int_max::<T>())]
+#[ensures(int_min::<T>() < 0 ==> int_min::<T>() <= -int_max::<T>())]
+pub fn integer_range<T: Integer>(x: T) {
+    dead
+}
+
+/// Every integer in the range of `T` is representable.
+#[trusted]
+#[logic(opaque)]
+#[requires(int_min::<T>() <= p && p <= int_max::<T>())]
+#[ensures(exists<z: T> z.deep_model() == p)]
+pub fn integer_in_range<T: Integer>(p: Int) {
+    dead
+}
+
+/// Saturating addition on `T` adds, then clamps to the range of `T`.
+#[trusted]
+#[logic(opaque)]
+#[ensures(a.saturating_add_logic(b).deep_model() == clamp::<T>(a.deep_model() + b.deep_model()))]
+pub fn integer_saturating_add<T: Integer>(a: T, b: T) {
+    dead
+}
+
+/// `p`, clamped to the range of `T`.
+#[logic(open)]
+pub fn clamp<T: Integer>(p: Int) -> Int {
+    pearlite! {
+        if p < int_min::<T>() { int_min::<T>() } else if p > int_max::<T>() { int_max::<T>() } else { p }
+    }
+}
+
+/// Clamping is 1-Lipschitz.
+#[logic]
+#[ensures(p <= q ==> clamp::<T>(p) <= clamp::<T>(q) && clamp::<T>(q) - clamp::<T>(p) <= q - p)]
+#[ensures(q <= p ==> clamp::<T>(q) <= clamp::<T>(p) && clamp::<T>(p) - clamp::<T>(q) <= p - q)]
+pub fn clamp_lipschitz<T: Integer>(p: Int, q: Int) {
+    pearlite! { integer_range(such_that(|z: T| true)) }
+}
+
+/// The saturating left fold of `s`, starting from zero.
+#[logic(open)]
+#[variant(s.len())]
+pub fn sat_sum<T: Integer>(s: Seq<T>) -> Int {
+    pearlite! {
+        if s.len() == 0 { 0 } else { clamp::<T>(sat_sum(s.subsequence(0, s.len() - 1)) + s[s.len() - 1].deep_model()) }
+    }
+}
+
+/// If all elements share a sign, the saturating sum is the clamped exact sum.
+#[logic]
+#[requires((forall<i> 0 <= i && i < s.len() ==> s[i].deep_model() >= 0)
+    || (forall<i> 0 <= i && i < s.len() ==> s[i].deep_model() <= 0))]
+#[ensures(sat_sum(s) == clamp::<T>(isum(s)))]
+#[ensures((forall<i> 0 <= i && i < s.len() ==> s[i].deep_model() >= 0) ==> isum(s) >= 0)]
+#[ensures((forall<i> 0 <= i && i < s.len() ==> s[i].deep_model() <= 0) ==> isum(s) <= 0)]
+#[variant(s.len())]
+pub fn monotone_sat_sum<T: Integer>(s: Seq<T>) {
+    pearlite! {
+        if s.len() > 0 {
+            integer_range(s[0]);
+            monotone_sat_sum(s.subsequence(0, s.len() - 1))
+        } else {
+            integer_range(such_that(|z: T| true))
+        }
+    }
+}

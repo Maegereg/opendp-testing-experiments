@@ -8,7 +8,7 @@ use crate::{
     verification::RealModel,
 };
 #[cfg(creusot)]
-use creusot_std::macros::{ensures, trusted};
+use creusot_std::macros::{ensures, pearlite, trusted};
 use dashu::{
     float::{
         FBig,
@@ -125,9 +125,15 @@ pub trait AlertingPow: Sized {
 /// assert_eq!(i8::MAX.saturating_add(i8::MAX), i8::MAX);
 /// ```
 pub trait SaturatingAdd: Sized {
+    /// Ghost model of `saturating_add`, defined by each implementation.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic]
+    fn saturating_add_logic(self, v: Self) -> Self;
+
     /// # Proof Definition
     /// For any `self` and `v` of type `Self`,
     /// returns `self + v`, saturating at the relevant high or low boundary of the type.
+    #[cfg_attr(creusot, ensures(result == self.saturating_add_logic(*v)))]
     fn saturating_add(&self, v: &Self) -> Self;
 }
 
@@ -365,7 +371,19 @@ impl_alerting_abs_float!(f32, f64);
 macro_rules! impl_alerting_int {
     ($($t:ty),+) => {
         $(impl SaturatingAdd for $t {
+            #[cfg(creusot)]
+            #[creusot_std::macros::logic(open)]
+            fn saturating_add_logic(self, v: Self) -> Self {
+                pearlite! {
+                    creusot_std::logic::such_that(|r: $t| r@ == (
+                        if self@ + v@ < <$t>::MIN@ { <$t>::MIN@ }
+                        else if self@ + v@ > <$t>::MAX@ { <$t>::MAX@ }
+                        else { self@ + v@ }))
+                }
+            }
+
             #[inline]
+            #[cfg_attr(creusot, ensures(result == self.saturating_add_logic(*v)))]
             fn saturating_add(&self, v: &Self) -> Self {
                 <$t>::saturating_add(*self, *v)
             }
@@ -436,7 +454,14 @@ impl_alerting_int!(
 macro_rules! impl_alerting_float {
     ($($t:ty),+) => {
         $(impl SaturatingAdd for $t {
+            #[cfg(creusot)]
+            #[creusot_std::macros::logic(opaque)]
+            fn saturating_add_logic(self, v: Self) -> Self {
+                dead
+            }
+
             #[cfg_attr(creusot, trusted)]
+            #[cfg_attr(creusot, ensures(result == self.saturating_add_logic(*v)))]
             fn saturating_add(&self, v: &Self) -> Self {
                 (self + v).clamp(<$t>::MIN, <$t>::MAX)
             }

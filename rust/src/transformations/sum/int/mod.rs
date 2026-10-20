@@ -16,14 +16,13 @@ use crate::error::Fallible;
 use crate::traits::Integer;
 #[cfg(creusot)]
 use crate::verification::{
-    dataset::sum,
-    integer::{isum, prefix_sums_fit},
+    integer::{integer_saturating_add, isum, prefix_sums_fit, sat_sum},
     real_abs,
 };
 #[cfg(creusot)]
 use creusot_std::{
     logic::real::Real,
-    macros::{ensures, requires, trusted},
+    macros::{ensures, invariant, proof_assert, requires, trusted},
 };
 
 /// # Proof Definition
@@ -54,4 +53,34 @@ where
     for<'a> T: Sum<&'a T>,
 {
     arg.iter().sum()
+}
+
+/// Zero.
+// Trusted: `num::Zero::zero` has no specification.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(result.deep_model() == 0))]
+pub(crate) fn int_zero<T: Integer>() -> T {
+    T::zero()
+}
+
+/// Sum the elements of `arg` with saturating arithmetic, from left to right.
+///
+/// Equivalent to `arg.iter().fold(T::zero(), |sum, v| sum.saturating_add(v))`.
+#[cfg_attr(creusot, ensures(result.deep_model() == sat_sum(arg@)))]
+pub(crate) fn saturating_sum<T: Integer>(arg: &Vec<T>) -> T {
+    let mut sum = int_zero::<T>();
+    let mut i = 0;
+    #[cfg_attr(creusot, invariant(i@ <= arg@.len()))]
+    #[cfg_attr(creusot, invariant(sum.deep_model() == sat_sum(arg@.subsequence(0, i@))))]
+    while i < arg.len() {
+        #[cfg(creusot)]
+        proof_assert!({ integer_saturating_add(sum, arg[i@]); true });
+        #[cfg(creusot)]
+        proof_assert!(arg@.subsequence(0, i@ + 1).subsequence(0, i@) == arg@.subsequence(0, i@));
+        sum = sum.saturating_add(&arg[i]);
+        i += 1;
+    }
+    #[cfg(creusot)]
+    proof_assert!(arg@.subsequence(0, arg@.len()) == arg@);
+    sum
 }
