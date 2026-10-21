@@ -4,8 +4,6 @@
 `clamp(a + b, -MAX, MAX)`, over the pairwise split `n // 2`. Deleting or inserting one element
 changes every later split, which regroups the elements, and clamping depends on the grouping.
 See FINDINGS.md, F2. Python floats are IEEE binary64, like Rust's `f64`.
-`rust/src/transformations/sum/test.rs` (`test_make_sum_float_pairwise_unstable`) runs the first two
-examples against OpenDP's `make_sum`.
 
     python3 verification/scripts/pairwise_ordered_sum_counterexample.py
 """

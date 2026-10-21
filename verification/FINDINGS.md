@@ -48,8 +48,8 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   over integer multiples of `k` within `make_sum`'s limits on the bounds, found the short examples
   above. Nothing shorter exists on the grids searched: unsized with bounds `[-1, 1]`, `[-1, 2]` and
   `[-2, 3]`; sized with `[-1, 1]`, and up to 8 and 7 elements with `[-1, 2]` and `[-2, 3]`.
-  `rust/src/transformations/sum/test.rs` (`test_make_sum_float_pairwise_unstable`) reproduces them
-  against OpenDP, and `scripts/pairwise_ordered_sum_counterexample.py` in Python.
+  A temporary test against OpenDP's `make_sum` confirmed them (the outputs and maps above), and
+  `scripts/pairwise_ordered_sum_counterexample.py` reproduces them in Python.
 - **Impact:** It only happens when sums saturate, so values must be large: up to `size_limit` of
   them must sum to `MAX`. That is exactly when `make_sum` chooses this sum. The impact depends on
   how the data's order is chosen:
