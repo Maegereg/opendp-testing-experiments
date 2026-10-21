@@ -10,7 +10,15 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | --- | --- | --- | --- |
 | `Function::{new, new_fallible, eval, clone}` | `core/mod.rs` | The ghost model (`pre`, `post`) records / replays the contract of the wrapped closure. | The bodies only wrap and call the closure; Creusot cannot see through `dyn Fn`. |
 | `StabilityMap::{new, new_fallible, eval, clone}` | `core/mod.rs` | As above (`post`); the closure must be total. | As above. |
-| Float `Inf{Add,Sub,Mul,Div}`, `AlertingAbs`, `Alerting*`, `Saturating*` (`saturating_add_logic` opaque), `Inf{Ln,Log2,Exp,...}`, `InfPowI` | `traits/arithmetic/mod.rs` | The trait contracts (e.g. `inf_add`: `out >= self + v`). | Implemented with `dashu` arbitrary-precision floats; not verifiable in Creusot. Candidate for testing / Kani. |
+| Float `Inf{Add,Sub,Mul,Div}`, `AlertingAbs`, `Alerting*`, `Saturating*` (`saturating_add_logic` opaque), `Inf{Ln,Log2,Exp,...}`, `InfPowI` | `traits/arithmetic/mod.rs` | The trait contracts (e.g. `inf_add`: `out >= self + v`; `inf_log2`: `out >= log2(self)`). | Implemented with `dashu` arbitrary-precision floats; not verifiable in Creusot. Candidate for testing / Kani. |
+| Accuracy of float `Inf{Add,Sub,Mul,Div}` and `inf_log2` (`RealModel::rounds_close`) | `traits/arithmetic/mod.rs`, `verification/mod.rs` | The result is within `|v| / 2 + 2^-10` of the exact value `v`. Not part of the Proof Definitions (`FINDINGS.md` D4). | Correct directed rounding moves a value by at most one unit in the last place. `true` (no assumption) for other types. |
+| Integer `inf_div` | `traits/arithmetic/mod.rs` | `out >= self / other` (as reals). | `num::Integer::div_ceil` has no specification. Panics on `MIN / -1` (`FINDINGS.md` F1). |
+| `pow2_mantissa_bits` | `transformations/sum/float/mod.rs` | `_2.inf_powi(MANTISSA_BITS)` is exactly `2^MANTISSA_BITS`. | Powers of two are computed exactly (`FINDINGS.md` D4). |
+| `float_one` | `transformations/sum/float/mod.rs` | `T::one()` is 1. | `num::One` has no specification. |
+| `FloatModel` for `f32`, `f64`; `float_facts` | `verification/float.rs` | `finite` is opaque; `mantissa_bits` is 52 / 23 (as `MANTISSA_BITS`); for every `Float`, `mantissa_bits >= 23` and `rounds_close` is the bound above. | `f32` and `f64` are the only implementors of `Float`. |
+| `log2_ge`, `log2_le` | `verification/float.rs` | `log2` is increasing and `log2(2^j) = j`. | Mathematics. |
+| `UncheckedSum::unchecked_sum` (`Sequential`, `Pairwise`) | `transformations/sum/float/checked/mod.rs` | If the sum does not overflow (`sum_finite`), its rounding error is at most `error_bound(n, sum of |x_i|, e)`: `(n - 1) u sum |x_i|` (sequential), `gamma(ceil(log2 n)) sum |x_i|` (pairwise), with `u` the unit roundoff. | Cited: Rump (2012), Jeannerod & Rump (2013) for recursive summation, valid for any `n`; Higham (2002), §4.2 for pairwise summation. Float addition is IEEE 754 round-to-nearest (Rust's semantics). |
+| `CanFloatSumOverflow::can_float_sum_overflow` (`Sequential`, `Pairwise`) | `transformations/sum/float/checked/mod.rs` | `Ok(false)` implies that summing at most `size` finite values within `bounds` does not overflow (`sum_finite`, opaque). | Proved in Lean (below). `sum_finite` corresponds to `seqSum` / `pwSum` not overflowing; the correspondence is by name. |
 | Signed integer `alerting_abs` | `traits/arithmetic/mod.rs` | `out = |self|`. | Wraps `checked_abs`, which `creusot-std` does not specify. |
 | `InfCast`, `ExactIntCast` (all impls) | `traits/cast/mod.rs` (trusted module) | `inf_cast`: `out >= v`; `neg_inf_cast`: `out <= v`; `exact_int_cast`: `out = v`. | Module includes float casts Creusot cannot translate. Integer-to-integer impls could be verified. |
 | `ProductOrd::total_max` | `traits/operations/mod.rs` (trusted module) | Returns one of its arguments, at least as large as both. | Generic comparisons; floats have no sound `DeepModel`. |
@@ -32,11 +40,10 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
   and every `transformations` submodule except `sum`.
 - `PrivacyMap` methods, `Function::make_chain`, `StabilityMap::make_chain`,
   `PrivacyMap::new_from_constant`.
-- Integer `alerting_pow`, `inf_div`, `neg_inf_div` (no specifications for `checked_pow`,
-  `num::Integer::div_{ceil,floor}`).
+- Integer `alerting_pow`, `neg_inf_div` (no specifications for `checked_pow`,
+  `num::Integer::div_floor`).
 - `catch_unwind_silent`, float `ProductOrd::total_cmp`.
-- Float sums: `round_up_to_nearest_power_of_two`; `can_float_sum_overflow`, which is proved in
-  Lean instead (below).
+- Float sums: `round_up_to_nearest_power_of_two` (its contract is assumed by the Lean proof).
 - Traits with self-referential associated types, moved into trusted modules (declarations only):
   `MicrodataMetric`/`EventLevelMetric`, `BoundedMetric`/`UnboundedMetric`, `ODPRound`.
 
@@ -48,7 +55,7 @@ a model of floating-point rounding. Its theorems depend only on Lean's standard 
 
 | Theorem | Rust item | Assumed |
 | --- | --- | --- |
-| `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls) | See below. |
+| `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls), whose Creusot contract they justify | See below. |
 
 Assumptions of the overflow-check theorems:
 

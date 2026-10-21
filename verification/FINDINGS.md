@@ -62,6 +62,27 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 - **Suggestion:** Add "and `out` is finite" to the Proof Definitions of the float `Inf*`
   operations (the Lean proof assumes it for `inf_mul`).
 
+### D4. The float sum relaxation relies on accuracy beyond the Proof Definitions
+
+- **Where:** `rust/src/transformations/sum/float/mod.rs`, `SumRelaxation::error` for `Sequential<T>`
+  and `Pairwise<T>`.
+- **What:** Both bounds compute `2^-k` (`k = MANTISSA_BITS`) by dividing by
+  `_2.inf_powi(k)`, which by its Proof Definition is only an *upper* bound on `2^k`. Dividing
+  by an upper bound gives a *lower* bound, so the computed bound is only an upper bound because
+  powers of two are computed exactly. The pairwise bound also computes `uk / (1 - uk)`, with
+  `uk >= log2(n) / 2^k` rounded up and `1 - uk` rounded down. The Proof Definitions of `inf_log2`,
+  `inf_div` and `neg_inf_sub` bound their results on one side only. They allow `inf_log2(n)` to
+  return, say, `2^30` for `f32`. Then `1 - uk < 0`, and the relaxation is negative.
+- **Why it is still sound:** The implementations round accurately, to within one unit in the last
+  place. The Creusot proof assumes much less: each result is within half its magnitude plus
+  `2^-10` of the exact value (`RealModel::rounds_close`), and `2^k` is exact. Removing either
+  assumption makes the proof fail.
+- **Impact:** None with the current implementations, but the relaxation's soundness silently
+  depends on how accurate the arithmetic is.
+- **Suggestion:** Compute `2^-k` exactly, or divide by a lower bound (`neg_inf_powi`). Also return
+  `Err` unless the computed `1 - uk` is positive. With both changes the Proof Definitions alone
+  suffice.
+
 ## Tool limitations (Creusot v0.14.0)
 
 | Limitation | Workaround |
@@ -76,3 +97,5 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 | Crash (`unreachable!`) in the resolve backend on `dyn Any` types. | Not reported yet; avoided by trusting the code involved. |
 | Lemmas cannot be applied under quantifiers. | State theorems with explicit parameters. |
 | Large conjunctive predicates time out as one goal. | Mark them `inline` so they are split. |
+| A lemma (unit-valued logic function) called in a `proof_assert!` in program code is erased, so its conclusion is not instantiated. | Return `bool` with `#[ensures(result && conclusion)]`, and assert the call. |
+| An impl method without a contract does not inherit its trait method's contract. | Restate the contract on the impl (trusted impls included). |

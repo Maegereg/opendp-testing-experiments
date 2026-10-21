@@ -13,6 +13,23 @@ use num::{One, Zero};
 use opendp_derive::bootstrap;
 
 use super::{Float, Pairwise, Sequential, SumRelaxation};
+#[cfg(creusot)]
+use crate::verification::{
+    RealModel,
+    dataset::sum,
+    float::{abs_sum, float_in_bounds, reals},
+    real_abs,
+};
+#[cfg(creusot)]
+use creusot_std::{
+    logic::{Seq, real::Real},
+    macros::{ensures, logic, trusted},
+};
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
@@ -50,6 +67,8 @@ mod ffi;
 ///
 /// # Generics
 /// * `S` - Summation algorithm to use over some data type `T` (`T` is shorthand for `S::Item`)
+#[cfg_attr(creusot, ensures(forall<t: FloatSum<S::Item>> result == Ok(t) ==>
+    float_checked_sum_contract::<S>(t, size_limit, bounds)))]
 pub fn make_bounded_float_checked_sum<S>(
     size_limit: usize,
     bounds: (S::Item, S::Item),
@@ -84,11 +103,12 @@ where
         AtomDomain::new_non_nan(),
         AbsoluteDistance::default(),
         Function::new_fallible(move |arg: &Vec<S::Item>| {
-            let mut data = arg.clone();
             if arg.len() > size_limit {
-                data.shuffle()?
+                let mut data = arg.clone();
+                data.shuffle()?;
+                return Ok(S::unchecked_sum(&data[..size_limit.min(data.len())]));
             }
-            Ok(S::unchecked_sum(&data[..size_limit.min(data.len())]))
+            Ok(S::unchecked_sum(arg))
         }),
         StabilityMap::new_fallible(move |d_in: &IntDistance| {
             // d_out =  |BS*(v) - BS*(v')| where BS* is the finite sum and BS the ideal sum
@@ -134,6 +154,8 @@ where
 ///
 /// # Generics
 /// * `S` - Summation algorithm to use over some data type `T` (`T` is shorthand for `S::Item`)
+#[cfg_attr(creusot, ensures(forall<t: FloatSum<S::Item>> result == Ok(t) ==>
+    sized_float_checked_sum_contract::<S>(t, size, bounds)))]
 pub fn make_sized_bounded_float_checked_sum<S>(
     size: usize,
     bounds: (S::Item, S::Item),
@@ -181,15 +203,30 @@ where
 
 #[doc(hidden)]
 pub trait UncheckedSum: SumRelaxation + CanFloatSumOverflow {
+    /// Sums `arg` in floating-point arithmetic. If the sum does not overflow, its rounding error
+    /// is within `error_bound`.
+    #[cfg_attr(creusot, ensures(forall<e: Real>
+        Self::sum_finite(arg@) && Self::error_bound(arg@.len(), abs_sum(reals(arg@)), e) ==>
+        real_abs(result.real() - sum(reals(arg@))) <= e))]
     fn unchecked_sum(arg: &[Self::Item]) -> Self::Item;
 }
 impl<T: Float> UncheckedSum for Sequential<T> {
+    // Trusted: the error bound of recursive summation (cited at `SumRelaxation::error_bound`).
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<e: Real>
+        Self::sum_finite(arg@) && Self::error_bound(arg@.len(), abs_sum(reals(arg@)), e) ==>
+        real_abs(result.real() - sum(reals(arg@))) <= e))]
     fn unchecked_sum(arg: &[T]) -> T {
         arg.iter().cloned().sum()
     }
 }
 
 impl<T: Float> UncheckedSum for Pairwise<T> {
+    // Trusted: the error bound of pairwise summation (cited at `SumRelaxation::error_bound`).
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<e: Real>
+        Self::sum_finite(arg@) && Self::error_bound(arg@.len(), abs_sum(reals(arg@)), e) ==>
+        real_abs(result.real() - sum(reals(arg@))) <= e))]
     fn unchecked_sum(arg: &[T]) -> T {
         match arg.len() {
             0 => T::zero(),
@@ -204,12 +241,31 @@ impl<T: Float> UncheckedSum for Pairwise<T> {
 
 #[doc(hidden)]
 pub trait CanFloatSumOverflow: SumRelaxation {
+    /// Summing the values of `x` does not overflow (to an infinity).
+    #[cfg(creusot)]
+    #[logic]
+    fn sum_finite(x: Seq<Self::Item>) -> bool;
+
+    /// If `Ok(false)`, summing at most `size` finite values within `bounds` does not overflow.
+    #[cfg_attr(creusot, ensures(result == Ok(false) ==> forall<x: Seq<Self::Item>>
+        x.len() <= size@ && float_in_bounds(x, bounds) ==> Self::sum_finite(x)))]
     fn can_float_sum_overflow(size: usize, bounds: (Self::Item, Self::Item)) -> Fallible<bool>;
 }
 
 impl<T: Float> CanFloatSumOverflow for Sequential<T> {
+    /// `OpenDP.Float.seqSum` (`verification/lean`) succeeds on the real values of `x`.
+    #[cfg(creusot)]
+    #[logic(opaque)]
+    fn sum_finite(x: Seq<T>) -> bool {
+        dead
+    }
+
+    // Trusted: proved in Lean (`OpenDP.Float.Fmt.canOverflowSeq_sound`).
     #[cfg_attr(creusot, creusot_std::macros::trusted)]
-    fn can_float_sum_overflow(size: usize, (lower, upper): (T, T)) -> Fallible<bool> {
+    #[cfg_attr(creusot, ensures(result == Ok(false) ==> forall<x: Seq<T>>
+        x.len() <= size@ && float_in_bounds(x, bounds) ==> Self::sum_finite(x)))]
+    fn can_float_sum_overflow(size: usize, bounds: (T, T)) -> Fallible<bool> {
+        let (lower, upper) = bounds;
         let _2 = T::one() + T::one();
         let size_ = T::inf_cast(size)?;
         let mag = lower.alerting_abs()?.total_max(upper)?;
@@ -239,8 +295,19 @@ impl<T: Float> CanFloatSumOverflow for Sequential<T> {
 }
 
 impl<T: Float> CanFloatSumOverflow for Pairwise<T> {
+    /// `OpenDP.Float.pwSum` (`verification/lean`) succeeds on the real values of `x`.
+    #[cfg(creusot)]
+    #[logic(opaque)]
+    fn sum_finite(x: Seq<T>) -> bool {
+        dead
+    }
+
+    // Trusted: proved in Lean (`OpenDP.Float.Fmt.canOverflowPw_sound`).
     #[cfg_attr(creusot, creusot_std::macros::trusted)]
-    fn can_float_sum_overflow(size: usize, (lower, upper): (T, T)) -> Fallible<bool> {
+    #[cfg_attr(creusot, ensures(result == Ok(false) ==> forall<x: Seq<T>>
+        x.len() <= size@ && float_in_bounds(x, bounds) ==> Self::sum_finite(x)))]
+    fn can_float_sum_overflow(size: usize, bounds: (T, T)) -> Fallible<bool> {
+        let (lower, upper) = bounds;
         let _2 = T::one() + T::one();
         let size_ = T::inf_cast(size)?;
         let mag = lower.alerting_abs()?.total_max(upper)?;

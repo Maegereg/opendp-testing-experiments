@@ -1,7 +1,7 @@
 use std::ops::{Add, Div, Mul, Sub};
 
 #[cfg(creusot)]
-use crate::verification::real_abs;
+use crate::verification::{float::log2, real_abs};
 use crate::{
     error::Fallible,
     traits::{ExactIntCast, InfCast},
@@ -186,11 +186,14 @@ pub trait InfLn: Sized {
 /// Fallible base-2 logarithm with specified rounding.
 ///
 /// Throws an error if the ideal output is not finite or representable.
-pub trait InfLog2: Sized {
+pub trait InfLog2: Sized + RealModel {
     /// # Proof Definition
     /// For any `self` of type `Self`,
     /// `self.inf_log2()` either returns `Ok(out)`,
     /// where $out \ge \log_2(self)$, or `Err(e)`.
+    // Under Creusot, also assumes that `out` is close to `log2(self)` (`RealModel::rounds_close`).
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+        out.real() >= log2(self.real()) && Self::rounds_close(log2(self.real()), out.real())))]
     fn inf_log2(self) -> Fallible<Self>;
     /// # Proof Definition
     /// For any `self` of type `Self`,
@@ -263,7 +266,9 @@ pub trait InfSub: Sized + AlertingSub + RealModel {
     /// For any two values `self` and `v` of type `Self`,
     /// `self.neg_inf_sub(v)` either returns `Ok(out)`,
     /// where $out \le self - v$, or `Err(e)`.
-    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() - v.real()))]
+    // Under Creusot, also assumes that `out` is close to `self - v` (`RealModel::rounds_close`).
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+        out.real() <= self.real() - v.real() && Self::rounds_close(self.real() - v.real(), out.real())))]
     fn neg_inf_sub(&self, v: &Self) -> Fallible<Self>;
 }
 
@@ -288,11 +293,14 @@ pub trait InfMul: Sized + AlertingMul + RealModel {
 /// Fallible division with specified rounding.
 ///
 /// Throws an error if the ideal output is not finite or representable.
-pub trait InfDiv: Sized + AlertingDiv {
+pub trait InfDiv: Sized + AlertingDiv + RealModel {
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
     /// `self.inf_div(v)` either returns `Ok(out)`,
     /// where $out \ge self / v$, or `Err(e)`.
+    // Under Creusot, also assumes that `out` is close to `self / v` (`RealModel::rounds_close`).
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+        out.real() >= self.real() / v.real() && Self::rounds_close(self.real() / v.real(), out.real())))]
     fn inf_div(&self, v: &Self) -> Fallible<Self>;
     /// # Proof Definition
     /// For any two values `self` and `v` of type `Self`,
@@ -529,9 +537,14 @@ impl_alerting_float!(f32, f64);
 // TRAIT InfSqrt, InfLn, InfExp (univariate)
 macro_rules! impl_float_inf_uni {
     ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident) => {
-        $(
+        $(impl_float_inf_uni!(@one $ty; $name, $method_inf, $method_neg_inf, $op;);)+
+    };
+    // With `$logic`, `$method_inf` is specified (under Creusot) by the logic function `$logic`.
+    (@one $ty:ty; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident; $($logic:ident)?) => {
         impl $name for $ty {
             #[cfg_attr(creusot, trusted)]
+            $(#[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+                out.real() >= $logic(self.real()) && Self::rounds_close($logic(self.real()), out.real())))])?
             fn $method_inf(self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -563,11 +576,12 @@ macro_rules! impl_float_inf_uni {
                 let output = Self::neg_inf_cast(output)?;
                 output.is_finite().then(|| output).ok_or_else(not_finite)
             }
-        })+
-    }
+        }
+    };
 }
 impl_float_inf_uni!(f64, f32; InfLn, inf_ln, neg_inf_ln, ln);
-impl_float_inf_uni!(f64, f32; InfLog2, inf_log2, neg_inf_log2, log2);
+impl_float_inf_uni!(@one f64; InfLog2, inf_log2, neg_inf_log2, log2; log2);
+impl_float_inf_uni!(@one f32; InfLog2, inf_log2, neg_inf_log2, log2; log2);
 impl_float_inf_uni!(f64, f32; InfLn1P, inf_ln_1p, neg_inf_ln_1p, ln_1p);
 impl_float_inf_uni!(f64, f32; InfSqrt, inf_sqrt, neg_inf_sqrt, sqrt);
 impl_float_inf_uni!(f64, f32; InfExp, inf_exp, neg_inf_exp, exp);
@@ -594,6 +608,8 @@ macro_rules! impl_int_inf {
             // Trusted: `num::Integer::div_ceil` has no specification.
             // Note: for signed types, `MIN.inf_div(&-1)` panics with "attempt to divide with overflow".
             #[cfg_attr(creusot, trusted)]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+                out.real() >= self.real() / other.real() && Self::rounds_close(self.real() / other.real(), out.real())))]
             fn inf_div(&self, other: &Self) -> Fallible<Self> {
                 if other == &0 {
                     return fallible!(Overflow, "attempt to divide by zero");
@@ -620,7 +636,8 @@ macro_rules! impl_float_inf_bi {
     ($($ty:ty),+; $name:ident, $method_inf:ident, $method_neg_inf:ident, $op:ident, $sym:tt) => {
         $(impl $name for $ty {
             #[cfg_attr(creusot, trusted)]
-            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= self.real() $sym other.real()))]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+                out.real() >= self.real() $sym other.real() && Self::rounds_close(self.real() $sym other.real(), out.real())))]
             fn $method_inf(&self, other: &Self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,
@@ -638,7 +655,8 @@ macro_rules! impl_float_inf_bi {
                 output.is_finite().then(|| output).ok_or_else(not_finite)
             }
             #[cfg_attr(creusot, trusted)]
-            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= self.real() $sym other.real()))]
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+                out.real() <= self.real() $sym other.real() && Self::rounds_close(self.real() $sym other.real(), out.real())))]
             fn $method_neg_inf(&self, other: &Self) -> Fallible<Self> {
                 let not_finite = || err!(
                     Overflow,

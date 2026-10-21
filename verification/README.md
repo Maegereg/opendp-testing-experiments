@@ -17,9 +17,13 @@ Requirements:
 
 ```sh
 export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
-tools/creusot.sh                                      # compile and prove everything in scope
-tools/creusot.sh 'transformations::sum::int::checked::*'   # prove one module
+tools/creusot.sh 'transformations::sum::*' 'verification::*' 'traits::*'   # the verified components
+tools/creusot.sh 'transformations::sum::int::checked::*'                   # one module
 ```
+
+The float ordered sums (not started yet) fail. A run without a filter also covers code outside
+the verified components that is not yet marked trusted, and reports failures there: `Debug` impls,
+`invoke`, and `PartialEq` for metrics.
 
 Lean (`verification/lean`, Mathlib v4.35.0, toolchain pinned by `lean-toolchain`):
 
@@ -60,7 +64,7 @@ only a dependency under `cfg(creusot)`.
 | `make_(sized_)bounded_int_monotonic_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_int_ordered_sum` | Verified: contracts and stability theorems (sized and unsized), under the insert-delete distance. |
 | `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
-| `make_(sized_)bounded_float_checked_sum` | Overflow check (`can_float_sum_overflow`) proved sound in Lean; the rest not started. |
+| `make_(sized_)bounded_float_checked_sum` | Verified: contracts and stability theorems (sized; unsized for datasets of at most `size_limit` values). Error bound computation verified; summation error bounds cited; overflow check proved in Lean. |
 | `make_(sized_)bounded_float_ordered_sum` | Not started |
 | `make_sum` (dispatch) | Not started |
 
@@ -129,6 +133,57 @@ justification is less obvious than the others (saturation is order-dependent).
 
 Mutation checks: `d_in / 3`, and a map of `d_in * upper` (ignoring `|lower|`), each make
 verification fail.
+
+### `make_bounded_float_checked_sum`, `make_sized_bounded_float_checked_sum`
+
+Proved (`rust/src/transformations/sum/float/{proof.rs,checked/proof.rs}`), for `S` =
+`Sequential<T>` or `Pairwise<T>` and every float type `T`:
+
+1. **The relaxation is large enough.** `S::error(size, lower, upper)` returns `e` bounding the
+   rounding error of summing `size` values within the bounds (`SumRelaxation::error_bound`), and
+   `relaxation` returns at least `2 e`. The bounds are the cited ones: `(n - 1) u sum |x_i|`
+   sequentially, and `gamma(ceil(log2 n)) sum |x_i|` pairwise, with `u = 2^-(MANTISSA_BITS + 1)`
+   the unit roundoff and `gamma(h) = h u / (1 - h u)`. The code instead uses
+   `n^2 2^-MANTISSA_BITS max(|L|, U)` and `gamma'(log2 n) n max(|L|, U)`, with
+   `gamma'(k) = k 2^-MANTISSA_BITS / (1 - k 2^-MANTISSA_BITS)`. The pairwise proof uses
+   `ceil(log2 n) <= 2 log2 n` (D1) and needs accurate rounding (D4).
+2. **The constructors meet their contracts:** inputs within the bounds; summing at most `size`
+   (resp. `size_limit`) values within them does not overflow, by `can_float_sum_overflow`; the
+   function returns the float sum (unsized: of datasets of at most `size_limit` values); the
+   stability map returns at least `(d_in / 2) (U - L) + 2 e` (sized) or
+   `d_in max(|L|, U) + 2 e` (unsized).
+3. **Stability:** the float sums of two datasets within symmetric distance `d_in` differ by at
+   most `|f(x) - sum(x)| + |sum(x) - sum(y)| + |sum(y) - f(y)| <= e + d_in * sensitivity + e`.
+   For the unsized sum, this covers datasets of at most `size_limit` values. Larger ones are
+   shuffled and truncated, and the function is then randomized: its stability needs a coupling
+   argument, not attempted here.
+
+Floats are modeled by the real numbers they represent, which are left opaque (and by whether
+they are finite). Float addition is never modeled directly. The proof relies on:
+
+- the summation error bounds, cited (Rump 2012 and Jeannerod & Rump 2013 for sequential
+  summation, valid for any `n`; Higham 2002, §4.2 for pairwise summation);
+- the overflow check, proved in Lean (below);
+- the outward-rounding contracts of the arithmetic, plus accuracy (D4).
+
+Mutation checks: each of the following makes verification fail:
+- `d_in / 3` in the sized map;
+- a relaxation of `e` instead of `2 e`;
+- no overflow check;
+- `n` instead of `n^2` in the sequential bound;
+- no factor `n` in the pairwise bound;
+- the unsized sensitivity `U - L` instead of `max(U - L, |L|, U)`.
+
+Weakening the accuracy of `neg_inf_sub` or `inf_log2` to their Proof Definitions, or `2^k` to an
+upper bound, also makes it fail (D4).
+
+Code changes (behavior unchanged):
+- `error` names its intermediate results.
+- `2^MANTISSA_BITS` and `T::one()` are computed by the helpers `pow2_mantissa_bits` and
+  `float_one`.
+- The unsized function clones the data only when it must shuffle it.
+- `can_float_sum_overflow` destructures `bounds` in its body.
+- The `inf_log2` impls are generated with a contract.
 
 ### `can_float_sum_overflow` (Lean)
 

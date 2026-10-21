@@ -1,7 +1,7 @@
 //! Traits that enable building stable and private algorithms.
 
 use crate::metrics::IntDistance;
-use crate::verification::{MaybeIntModel, RealModel};
+use crate::verification::{MaybeFloatModel, MaybeIntModel, RealModel};
 use num::{NumCast, One, Zero};
 use std::hash::Hash;
 use std::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
@@ -295,6 +295,7 @@ pub trait Float:
     + CastInternalRational
     + ExactIntCast<Self::Bits>
     + RoundCast<f64>
+    + MaybeFloatModel
 {
 }
 impl<T> Float for T where
@@ -312,5 +313,6 @@ impl<T> Float for T where
         + CastInternalRational
         + ExactIntCast<Self::Bits>
         + RoundCast<f64>
+        + MaybeFloatModel
 {
 }

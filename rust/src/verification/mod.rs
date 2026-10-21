@@ -64,6 +64,24 @@ pub mod integer;
 #[cfg(creusot)]
 pub mod ordered;
 
+/// Floats, and the rounding error of float sums.
+#[cfg(creusot)]
+pub mod float;
+
+/// A supertrait of [`Float`](crate::traits::Float) that is
+/// [`FloatModel`](float::FloatModel) under Creusot, and empty otherwise.
+#[cfg(creusot)]
+#[doc(hidden)]
+pub trait MaybeFloatModel: float::FloatModel {}
+#[cfg(creusot)]
+impl<T: float::FloatModel + ?Sized> MaybeFloatModel for T {}
+
+#[cfg(not(creusot))]
+#[doc(hidden)]
+pub trait MaybeFloatModel {}
+#[cfg(not(creusot))]
+impl<T: ?Sized> MaybeFloatModel for T {}
+
 /// The real number that a numeric value represents.
 ///
 /// The "Proof Definitions" of OpenDP's arithmetic traits are stated over the reals
@@ -74,6 +92,14 @@ pub mod ordered;
 pub trait RealModel {
     #[creusot_std::macros::logic]
     fn real(self) -> creusot_std::logic::real::Real;
+
+    /// `out` is close to `v`, as is the result of rounding `v` (in either direction) to `Self`.
+    /// Used in contracts of operations whose Proof Definitions only promise rounding in one
+    /// direction, but whose implementations also round accurately.
+    /// `true` (no assumption) except for floats.
+    #[creusot_std::macros::logic]
+    fn rounds_close(v: creusot_std::logic::real::Real, out: creusot_std::logic::real::Real)
+    -> bool;
 }
 
 #[cfg(not(creusot))]
@@ -106,6 +132,10 @@ mod real_model {
             fn real(self) -> Real {
                 pearlite! { Real::from_int(self@) }
             }
+            #[logic(open)]
+            fn rounds_close(_v: Real, _out: Real) -> bool {
+                true
+            }
         })*)
     }
     impl_real_model_int!(
@@ -117,11 +147,19 @@ mod real_model {
         fn real(self) -> Real {
             Real::from_int(self.deep_model())
         }
+        #[logic(open)]
+        fn rounds_close(_v: Real, _out: Real) -> bool {
+            true
+        }
     }
     impl RealModel for UBig {
         #[logic(open)]
         fn real(self) -> Real {
             Real::from_int(self.deep_model())
+        }
+        #[logic(open)]
+        fn rounds_close(_v: Real, _out: Real) -> bool {
+            true
         }
     }
     impl RealModel for RBig {
@@ -129,9 +167,13 @@ mod real_model {
         fn real(self) -> Real {
             self.deep_model()
         }
+        #[logic(open)]
+        fn rounds_close(_v: Real, _out: Real) -> bool {
+            true
+        }
     }
 
-    // Left uninterpreted for now. Contracts about floats are trusted,
+    // Left uninterpreted. Contracts about floats are trusted,
     // and checked for consistency by mutation tests.
     macro_rules! impl_real_model_opaque {
         ([$($generics:tt)*] $ty:ty) => {
@@ -140,12 +182,34 @@ mod real_model {
                 fn real(self) -> Real {
                     dead
                 }
+                #[logic(open)]
+                fn rounds_close(_v: Real, _out: Real) -> bool {
+                    true
+                }
             }
         };
     }
-    impl_real_model_opaque!([] f32);
-    impl_real_model_opaque!([] f64);
     impl_real_model_opaque!([R: Round, const B: u64] FBig<R, B>);
+
+    // Rounding `v` (in either direction, faithfully) moves it by at most one unit in the last
+    // place, at most `|v| * 2^-MANTISSA_BITS` (or the smallest subnormal, below the normal range).
+    // Assumed here in the much weaker form `|v| / 2 + 2^-10`.
+    macro_rules! impl_real_model_float {
+        ($($ty:ty),*) => ($(impl RealModel for $ty {
+            #[logic(opaque)]
+            fn real(self) -> Real {
+                dead
+            }
+            #[logic(open)]
+            fn rounds_close(v: Real, out: Real) -> bool {
+                pearlite! {
+                    super::real_abs(out - v)
+                        <= super::real_abs(v) / Real::from_int(2) + Real::from_int(1) / Real::from_int(1024)
+                }
+            }
+        })*)
+    }
+    impl_real_model_float!(f32, f64);
     // Pairs are only compared (by `ProductOrd`) when clamping.
     impl_real_model_opaque!([T1, T2](T1, T2));
 }
