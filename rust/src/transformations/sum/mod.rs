@@ -16,7 +16,7 @@ use crate::traits::{CheckAtom, Float, Integer};
 use crate::transformations::{make_ordered_random, make_unordered};
 #[cfg(creusot)]
 use creusot_std::prelude::*;
-use int::{can_int_sum_overflow, signs_agree};
+use int::signs_agree;
 use std::iter::Sum;
 
 #[cfg(creusot)]
