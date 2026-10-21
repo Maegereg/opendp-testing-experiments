@@ -18,7 +18,8 @@ Requirements:
 ```sh
 export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 # the verified components
-tools/creusot.sh 'transformations::sum::*' 'transformations::cast_metric::*' 'combinators::chain::*' \
+tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
+  'transformations::cast_metric::*' 'combinators::chain::*' \
   'verification::*' 'traits::*' 'domains::*' \
   'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*'
 tools/creusot.sh 'transformations::sum::int::checked::*'   # one module
@@ -304,3 +305,40 @@ some primitives that meet the weakened contracts:
 - the size is rounded down when cast.
 
 No code changes.
+
+## Status: `make_count_by`
+
+Verified (`rust/src/transformations/count/proof.rs`), for every key type `TK` and integer count
+type `TV`:
+
+1. **The constructor meets its contract.** The function can be evaluated on any dataset. It
+   returns a map from each value occurring in the data to its number of occurrences, saturated at
+   `TV::MAX`, and has no other keys. The stability map returns at least `(d_in, d_in, d_in)`.
+2. **Stability.** On datasets within symmetric distance `d_in`, the count maps are close under
+   `L01InfDistance` (absent keys count as 0):
+   - each count differs by at most `d_in` (L∞);
+   - for any finite set of distinct keys, the differences sum to at most `d_in` (L1), and at most
+     `d_in` of the counts differ (L0).
+
+   Bounding the sums for every finite key set is equivalent to bounding the norms, because only
+   finitely many counts are non-zero.
+
+The proof writes `x = c + a`, `y = c + b` as multisets with `|a| + |b| <= d_in`. Saturation is
+1-Lipschitz, so each count moves by at most `count(a, k) + count(b, k)`. Summed over distinct keys,
+that is at most `|a| + |b|`. The L0 distance is at most the L1 distance because counts are
+integers. Datasets are modeled by the deep models of their elements, with a generic multiset model
+(`verification/multiset.rs`).
+
+Trusted: `count_by_map` (the counting loop, `TRUST.md`), as `HashMap::entry` has no specification
+in Creusot.
+
+Mutation checks: each of the following makes verification fail:
+- halving the L0 or the L1 component of the stability map;
+- halving the L1 component and weakening the contract to match (the theorem fails);
+- stating the L1 bound for key sequences that may repeat keys.
+
+Code changes (behavior unchanged):
+- The counting closure is moved into `count_by_map`.
+- `TK` gains a `MaybeDeepModel` bound, which is empty outside Creusot.
+- The other constructors in the module (`make_count`, `make_count_distinct`,
+  `make_count_by_categories`) are marked trusted, as they are out of scope.

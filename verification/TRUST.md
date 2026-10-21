@@ -36,6 +36,7 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `int_sum` | `transformations/sum/int/mod.rs` | If every prefix sum is representable, `iter().sum()` returns the exact sum. | `Iterator::sum` for integers adds in order. |
 | `integer_real`, `integer_zero`, `integer_interval`, `integer_neg`, `integer_range`, `integer_in_range`, `integer_saturating_add` | `verification/integer.rs` | Facts about the values of `Integer` types: `real` is the integer value; values form the interval `[int_min, int_max]` containing 0 (with `int_min <= -int_max` if signed); `saturating_add` clamps to it. | Hold for each of the 12 integer types, the only implementors of `Integer`. Each integer `saturating_add` is itself verified against `std`'s specification. |
 | `int_zero` | `transformations/sum/int/mod.rs` | `T::zero()` is 0. | `num::Zero` has no specification. |
+| `count_by_map` | `transformations/count/mod.rs` | Returns a map whose keys are exactly the values in the data (by deep model), each mapped to its number of occurrences saturated at `TV::MAX`. | `HashMap::{new, entry}` have no specifications in Creusot. Also assumes that `Eq` and `Hash` on the key type agree with equality of deep models, as they do for `Hashable` types (integers, `bool`, `char`, `String`). Each integer `saturating_add` is verified on its own, but not its use in the loop. |
 | `StabilityMap::new_from_constant` | `core/mod.rs` | On success, `c >= 0` and `d_out >= d_in * c`. | Compares the generic distance `c` with zero. |
 | `RealModel` for `f32`, `f64`, `FBig`, pairs | `verification/mod.rs` | Opaque. | Constrained only by trusted float contracts. Consistency is checked by mutation tests. |
 | `DeepModel` for `IBig`, `UBig`, `RBig` | `creusot-std` fork | Opaque (`Int` / `Real`). | Not yet constrained by contracts. |
@@ -44,7 +45,9 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 
 - Modules outside the current scope: `accuracy`, `data`, `interactive`, `measurements`, `measures`,
   `utilities`, `error`, `domains`, `traits::{cast, operations, samplers}`, every `combinators`
-  submodule except `chain`, and every `transformations` submodule except `sum` and `cast_metric`.
+  submodule except `chain`, and every `transformations` submodule except `sum`, `count` and
+  `cast_metric`.
+- In `transformations::count`: every constructor except `make_count_by`.
 - In `combinators::chain`: `make_chain_mt`, `make_chain_pm`, `mismatch_error`, and the `>>` impls
   involving measurements or functions. In `transformations::cast_metric`: `make_metric_bounded`,
   `make_metric_unbounded`.

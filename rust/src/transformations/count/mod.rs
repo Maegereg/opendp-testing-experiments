@@ -12,6 +12,19 @@ use crate::domains::{AtomDomain, MapDomain, VectorDomain};
 use crate::error::*;
 use crate::metrics::{AbsoluteDistance, L1Distance, L01InfDistance, LpDistance, SymmetricDistance};
 use crate::traits::{Hashable, InfCast, Integer, Number, Primitive};
+use crate::verification::MaybeDeepModel;
+#[cfg(creusot)]
+use crate::verification::{integer::int_max, multiset::count};
+#[cfg(creusot)]
+use creusot_std::{
+    macros::{ensures, trusted},
+    model::DeepModel,
+};
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[bootstrap(features("contrib"), generics(TIA(suppress), TO(default = "int")))]
 /// Make a Transformation that computes a count of the number of records in data.
@@ -26,6 +39,7 @@ use crate::traits::{Hashable, InfCast, Integer, Number, Primitive};
 /// # Generics
 /// * `TIA` - Atomic Input Type. Input data is expected to be of the form `Vec<TIA>`.
 /// * `TO` - Output Type. Must be numeric.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_count<TIA, TO>(
     input_domain: VectorDomain<AtomDomain<TIA>>,
     input_metric: SymmetricDistance,
@@ -69,6 +83,7 @@ where
 /// # Generics
 /// * `TIA` - Atomic Input Type. Input data is expected to be of the form `Vec<TIA>`.
 /// * `TO` - Output Type. Must be numeric.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_count_distinct<TIA, TO>(
     input_domain: VectorDomain<AtomDomain<TIA>>,
     input_metric: SymmetricDistance,
@@ -102,6 +117,7 @@ pub trait CountByCategoriesConstant<QO> {
     fn get_stability_constant() -> QO;
 }
 impl<const P: usize, Q: One> CountByCategoriesConstant<Q> for LpDistance<P, Q> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn get_stability_constant() -> Q {
         Q::one()
     }
@@ -133,6 +149,7 @@ impl<const P: usize, Q: One> CountByCategoriesConstant<Q> for LpDistance<P, Q> {
 ///
 /// # Returns
 /// The carrier type is `Vec<TOA>`, a vector of the counts (`TOA`).
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_count_by_categories<MO, TIA, TOA>(
     input_domain: VectorDomain<AtomDomain<TIA>>,
     input_metric: SymmetricDistance,
@@ -213,7 +230,8 @@ where
 ///
 /// # Returns
 /// The carrier type is `HashMap<TK, TV>`, a hashmap of the count (`TV`) for each unique data input (`TK`).
-pub fn make_count_by<TK: Hashable, TV: Integer>(
+#[cfg_attr(creusot, ensures(forall<t: CountBy<TK, TV>> result == Ok(t) ==> count_by_contract(t)))]
+pub fn make_count_by<TK: Hashable + MaybeDeepModel, TV: Integer>(
     input_domain: VectorDomain<AtomDomain<TK>>,
     input_metric: SymmetricDistance,
 ) -> Fallible<
@@ -229,18 +247,28 @@ pub fn make_count_by<TK: Hashable, TV: Integer>(
         input_metric,
         MapDomain::new(input_domain.element_domain, AtomDomain::new_non_nan()),
         L01InfDistance::default(),
-        Function::new(move |data: &Vec<TK>| {
-            let mut counts = HashMap::new();
-            data.iter().for_each(|v| {
-                let count = counts.entry(v.clone()).or_insert_with(TV::zero);
-                *count = TV::one().saturating_add(count);
-            });
-            counts
-        }),
+        Function::new(move |data: &Vec<TK>| count_by_map(data)),
         StabilityMap::new_fallible(move |d_in| {
             Ok((*d_in, TV::inf_cast(*d_in)?, TV::inf_cast(*d_in)?))
         }),
     )
+}
+
+/// The number of occurrences of each value in `data`, saturating at `TV::MAX`.
+// Trusted: `HashMap::entry` has no specification. Assumes that `Eq` and `Hash` on `TK` agree with
+// equality of deep models.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(forall<k: TK::DeepModelTy>
+    result@.contains(k) == (count((*data).deep_model(), k) > 0)))]
+#[cfg_attr(creusot, ensures(forall<k: TK::DeepModelTy> result@.contains(k) ==>
+    result@[k].deep_model() == saturate(count((*data).deep_model(), k), int_max::<TV>())))]
+fn count_by_map<TK: Hashable + MaybeDeepModel, TV: Integer>(data: &Vec<TK>) -> HashMap<TK, TV> {
+    let mut counts = HashMap::new();
+    data.iter().for_each(|v| {
+        let count = counts.entry(v.clone()).or_insert_with(TV::zero);
+        *count = TV::one().saturating_add(count);
+    });
+    counts
 }
 
 pub trait CountByMetric: Metric {
@@ -248,12 +276,14 @@ pub trait CountByMetric: Metric {
 }
 
 impl<Q: InfCast<u32>> CountByMetric for L1Distance<Q> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn stability_map(d_in: u32) -> Fallible<Self::Distance> {
         Q::inf_cast(d_in)
     }
 }
 
 impl<Q: InfCast<u32>> CountByMetric for L01InfDistance<AbsoluteDistance<Q>> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn stability_map(d_in: u32) -> Fallible<Self::Distance> {
         Ok((d_in, Q::inf_cast(d_in)?, Q::inf_cast(d_in)?))
     }

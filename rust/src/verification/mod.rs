@@ -56,6 +56,10 @@ impl<T: ?Sized> MaybeIntModel for T {}
 #[cfg(creusot)]
 pub mod dataset;
 
+/// Datasets of arbitrary values as multisets, and the symmetric distance between them.
+#[cfg(creusot)]
+pub mod multiset;
+
 /// Sums of integer datasets, and when they can be computed without overflow.
 #[cfg(creusot)]
 pub mod integer;

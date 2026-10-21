@@ -57,7 +57,6 @@ mod sum_of_squared_deviations;
 pub use sum_of_squared_deviations::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod count;
 #[cfg(feature = "contrib")]
 pub use count::*;
