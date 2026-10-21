@@ -72,6 +72,10 @@ pub mod float;
 #[cfg(creusot)]
 pub mod clamped;
 
+/// The insert-delete and symmetric distances, and how shuffling relates them.
+#[cfg(creusot)]
+pub mod cast_metric;
+
 /// A supertrait of [`Float`](crate::traits::Float) that is
 /// [`FloatModel`](float::FloatModel) under Creusot, and empty otherwise.
 #[cfg(creusot)]

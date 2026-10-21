@@ -8,6 +8,8 @@ use crate::core::{
     Transformation,
 };
 use crate::error::{Error, ErrorVariant, Fallible};
+#[cfg(creusot)]
+use creusot_std::prelude::*;
 use std::fmt::Debug;
 
 const ERROR_URL: &str = "https://github.com/opendp/opendp/discussions/297";
@@ -25,6 +27,8 @@ macro_rules! assert_elements_match {
 }
 pub(crate) use assert_elements_match;
 
+// Trusted: formats the error message.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub(crate) fn mismatch_error<T: Debug>(variant: ErrorVariant, struct1: &T, struct2: &T) -> Error {
     let str1 = format!("{:?}", struct1);
     let str2 = format!("{:?}", struct2);
@@ -75,6 +79,7 @@ pub(crate) fn mismatch_error<T: Debug>(variant: ErrorVariant, struct1: &T, struc
 /// * `MI` - Input Metric.
 /// * `MX` - Intermediate Metric.
 /// * `MO` - Output Measure.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_chain_mt<DI, DX, TO, MI, MX, MO>(
     measurement1: &Measurement<DX, MX, MO, TO>,
     transformation0: &Transformation<DI, MI, DX, MX>,
@@ -109,6 +114,30 @@ where
     )
 }
 
+/// `t` evaluates `t0`, then `t1` on its result, and its stability map is the composition of
+/// theirs.
+#[cfg(creusot)]
+#[logic(open, prophetic)]
+pub fn is_chain_tt<DI, DX, DO, MI, MX, MO>(
+    t: Transformation<DI, MI, DO, MO>,
+    t1: Transformation<DX, MX, DO, MO>,
+    t0: Transformation<DI, MI, DX, MX>,
+) -> bool
+where
+    DI: Domain,
+    DX: Domain,
+    DO: Domain,
+    MI: Metric,
+    MX: Metric,
+    MO: Metric,
+{
+    pearlite! {
+        t.function.is_chain(t1.function, t0.function)
+        && forall<d: MI::Distance, o: MO::Distance> t.stability_map.post()[d][Ok(o)] ==>
+            exists<x: MX::Distance> t0.stability_map.post()[d][Ok(x)] && t1.stability_map.post()[x][Ok(o)]
+    }
+}
+
 /// Construct the functional composition (`transformation1` ○ `transformation0`).
 /// Returns a Measurement that when invoked, computes `transformation1(transformation0(x))`.
 ///
@@ -123,6 +152,8 @@ where
 /// * `MI` - Input Metric.
 /// * `MX` - Intermediate Metric.
 /// * `MO` - Output Metric.
+#[cfg_attr(creusot, ensures(forall<t: Transformation<DI, MI, DO, MO>> result == Ok(t) ==>
+    is_chain_tt(t, *transformation1, *transformation0)))]
 pub fn make_chain_tt<DI, DX, DO, MI, MX, MO>(
     transformation1: &Transformation<DX, MX, DO, MO>,
     transformation0: &Transformation<DI, MI, DX, MX>,
@@ -177,6 +208,7 @@ where
 /// * `TO` - Output Type.
 /// * `MI` - Input Metric.
 /// * `MO` - Output Measure.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_chain_pm<DI, TX, TO, MI, MO>(
     postprocess1: &Function<TX, TO>,
     measurement0: &Measurement<DI, MI, MO, TX>,

@@ -10,7 +10,7 @@
 //! The constructors' contracts hold for pairwise summation too, but its stability theorem does
 //! not: the pairwise saturating sum is not stable (`FINDINGS.md`, F2).
 use creusot_std::{
-    logic::{real::Real, such_that},
+    logic::{Int, real::Real, such_that},
     prelude::*,
 };
 
@@ -23,7 +23,7 @@ use crate::{
     verification::{
         RealModel,
         clamped::{bounded, csum, id_close, sized_csum_sensitivity, unsized_csum_sensitivity},
-        float::{FloatModel, float_facts, float_in_bounds, mag, reals, unit_roundoff},
+        float::{float_facts, float_in_bounds, mag, reals, unit_roundoff},
         real_abs,
     },
 };
@@ -120,6 +120,64 @@ pub fn seq_saturating_error<T: Float>(size: usize, bounds: (T, T), e: Real, x: S
     }
 }
 
+/// The sequential saturating sums of two sequences of at most `n` values within `bounds`, within
+/// insert-delete distance `d`, differ by at most `d * max(|lower|, upper) + 2 e`, where `e` bounds
+/// the rounding error of summing `n` values.
+#[logic]
+#[requires(Sequential::<T>::error_bound(n@, Real::from_int(n@) * mag(bounds.0.real(), bounds.1.real()), e))]
+#[requires(x.len() <= n@ && float_in_bounds(x, bounds))]
+#[requires(y.len() <= n@ && float_in_bounds(y, bounds))]
+#[requires(id_close(reals(x), reals(y), d))]
+#[ensures(real_abs(Sequential::<T>::saturating_sum_logic(x).real() - Sequential::<T>::saturating_sum_logic(y).real())
+    <= Real::from_int(d) * mag(bounds.0.real(), bounds.1.real()) + e + e)]
+pub fn seq_saturating_sum_stable<T: Float>(
+    n: usize,
+    bounds: (T, T),
+    e: Real,
+    x: Seq<T>,
+    y: Seq<T>,
+    d: Int,
+) {
+    pearlite! {
+        let (lo, hi) = bounds;
+        let m = mag(lo.real(), hi.real());
+        float_facts::<T>();
+        seq_saturating_error::<T>(n, bounds, e, x);
+        seq_saturating_error::<T>(n, bounds, e, y);
+        proof_assert!(m >= -lo.real() && m >= hi.real() && m >= Real::from_int(0));
+        unsized_csum_sensitivity(reals(x), reals(y), d, T::max_finite(), lo.real(), hi.real(), m)
+    }
+}
+
+/// The sequential saturating sums of two sequences of `n` values within `bounds`, within
+/// insert-delete distance `d`, differ by at most `(d / 2) * (upper - lower) + 2 e`, where `e`
+/// bounds the rounding error of summing `n` values.
+#[logic]
+#[requires(Sequential::<T>::error_bound(n@, Real::from_int(n@) * mag(bounds.0.real(), bounds.1.real()), e))]
+#[requires(bounds.0.real() <= bounds.1.real())]
+#[requires(x.len() == n@ && float_in_bounds(x, bounds))]
+#[requires(y.len() == n@ && float_in_bounds(y, bounds))]
+#[requires(id_close(reals(x), reals(y), d))]
+#[ensures(real_abs(Sequential::<T>::saturating_sum_logic(x).real() - Sequential::<T>::saturating_sum_logic(y).real())
+    <= Real::from_int(d / 2) * (bounds.1.real() - bounds.0.real()) + e + e)]
+pub fn sized_seq_saturating_sum_stable<T: Float>(
+    n: usize,
+    bounds: (T, T),
+    e: Real,
+    x: Seq<T>,
+    y: Seq<T>,
+    d: Int,
+) {
+    pearlite! {
+        let (lo, hi) = bounds;
+        float_facts::<T>();
+        seq_saturating_error::<T>(n, bounds, e, x);
+        seq_saturating_error::<T>(n, bounds, e, y);
+        proof_assert!(reals(x).len() == reals(y).len());
+        sized_csum_sensitivity(reals(x), reals(y), d, T::max_finite(), lo.real(), hi.real())
+    }
+}
+
 /// Stability of `make_sized_bounded_float_ordered_sum::<Sequential<T>>`: on any two datasets in
 /// the input domain within insert-delete distance `d`, the outputs differ by at most the
 /// stability map at `d`.
@@ -130,7 +188,7 @@ pub fn seq_saturating_error<T: Float>(size: usize, bounds: (T, T), e: Real, x: S
 #[requires(id_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_float_ordered_sum_is_stable<T: Float>(
     t: FloatOrderedSum<T>,
     size: usize,
@@ -141,18 +199,15 @@ pub fn sized_float_ordered_sum_is_stable<T: Float>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         let e = such_that(|e: Real|
             Sequential::<T>::error_bound(size@, Real::from_int(size@) * mag(lo.real(), hi.real()), e)
             && forall<d: IntDistance, o: T> t.stability_map.post()[d][Ok(o)] ==>
                 o.real() >= Real::from_int(d@ / 2) * (hi.real() - lo.real()) + e + e);
-        float_facts::<T>();
-        seq_saturating_error::<T>(size, bounds, e, x@);
-        seq_saturating_error::<T>(size, bounds, e, y@);
-        proof_assert!(reals(x@).len() == reals(y@).len());
-        sized_csum_sensitivity(reals(x@), reals(y@), d@, T::max_finite(), lo.real(), hi.real())
+        sized_seq_saturating_sum_stable::<T>(size, bounds, e, x@, y@, d@);
+        true
     }
 }
 
@@ -168,7 +223,7 @@ pub fn sized_float_ordered_sum_is_stable<T: Float>(
 #[requires(id_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn float_ordered_sum_is_stable<T: Float>(
     t: FloatOrderedSum<T>,
     size_limit: usize,
@@ -179,7 +234,7 @@ pub fn float_ordered_sum_is_stable<T: Float>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         let m = mag(lo.real(), hi.real());
@@ -187,11 +242,8 @@ pub fn float_ordered_sum_is_stable<T: Float>(
             Sequential::<T>::error_bound(size_limit@, Real::from_int(size_limit@) * m, e)
             && forall<d: IntDistance, o: T> t.stability_map.post()[d][Ok(o)] ==>
                 o.real() >= Real::from_int(d@) * m + e + e);
-        float_facts::<T>();
         proof_assert!(x@.subsequence(0, x@.len()) == x@ && y@.subsequence(0, y@.len()) == y@);
-        seq_saturating_error::<T>(size_limit, bounds, e, x@);
-        seq_saturating_error::<T>(size_limit, bounds, e, y@);
-        proof_assert!(m >= -lo.real() && m >= hi.real() && m >= Real::from_int(0));
-        unsized_csum_sensitivity(reals(x@), reals(y@), d@, T::max_finite(), lo.real(), hi.real(), m)
+        seq_saturating_sum_stable::<T>(size_limit, bounds, e, x@, y@, d@);
+        true
     }
 }

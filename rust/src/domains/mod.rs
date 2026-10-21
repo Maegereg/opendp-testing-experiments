@@ -149,13 +149,18 @@ impl<T: CheckAtom> AtomDomain<T> {
     }
 }
 // Under Creusot, `AtomDomain` exposes a ghost model of its bounds
-// (`domains` is trusted, so these are constrained only by the constructors' contracts).
+// (`domains` is trusted, so these are constrained only by the contracts in this module).
 #[cfg(creusot)]
 impl<T: CheckAtom> AtomDomain<T> {
     /// Ghost model: `Some((lower, upper))` if the domain has closed bounds, inclusive.
-    #[logic(opaque)]
+    #[logic(open)]
     pub fn closed_bounds(self) -> Option<(T, T)> {
-        dead
+        pearlite! {
+            match self.bounds {
+                Some(b) => b.closed(),
+                None => None,
+            }
+        }
     }
 }
 
@@ -332,7 +337,18 @@ impl<T: PartialOrd + Debug + CheckNull> Bounds<T> {
         }
     }
 }
+// Under Creusot, `Bounds` exposes a ghost model of its closed bounds.
+#[cfg(creusot)]
+impl<T> Bounds<T> {
+    /// Ghost model: `Some((lower, upper))` if both bounds are inclusive.
+    #[logic(opaque)]
+    pub fn closed(self) -> Option<(T, T)> {
+        dead
+    }
+}
+
 impl<T: Clone> Bounds<T> {
+    #[cfg_attr(creusot, ensures(forall<b: (T, T)> result == Ok(b) ==> self.closed() == Some(b)))]
     pub fn get_closed(&self) -> Fallible<(T, T)> {
         match (&self.lower, &self.upper) {
             (Bound::Included(lower), Bound::Included(upper)) => Ok((lower.clone(), upper.clone())),

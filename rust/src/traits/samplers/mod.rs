@@ -101,12 +101,33 @@ pub trait Shuffle {
     /// mutate `self` such that the elements within are ordered randomly.
     /// Returns `Err(e)` if there is insufficient system entropy,
     /// or `Ok(())` otherwise.
+    #[cfg_attr(creusot, creusot_std::macros::ensures(result == Ok(()) ==> (*self).reorders(^self)))]
     fn shuffle(&mut self) -> Fallible<()>;
+
+    /// Ghost model: `out` holds the elements of `self`, in some order.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic]
+    fn reorders(self, out: Self) -> bool;
 }
 impl<T> Shuffle for Vec<T> {
+    // Trusted (as is this module): `SliceRandom::shuffle` permutes the slice.
+    #[cfg_attr(creusot, creusot_std::macros::ensures(result == Ok(()) ==> (*self).reorders(^self)))]
     fn shuffle(&mut self) -> Fallible<()> {
         let mut rng = GeneratorOpenDP::new();
         SliceRandom::shuffle(self.as_mut_slice(), &mut rng);
         rng.error
     }
+
+    // Visible only in this module (see `vec_reorders`), as `permutation_of` slows down unrelated proofs.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open(self))]
+    fn reorders(self, out: Self) -> bool {
+        pearlite! { out@.permutation_of(self@) }
+    }
 }
+
+/// Shuffling a vector permutes its elements.
+#[cfg(creusot)]
+#[creusot_std::macros::logic]
+#[creusot_std::macros::ensures(a.reorders(b) == b@.permutation_of(a@))]
+pub fn vec_reorders<T>(a: Vec<T>, b: Vec<T>) {}

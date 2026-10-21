@@ -121,7 +121,7 @@ pub fn clamped_distance<T: Integer>(p: Int, q: Int, bound: Real) {
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn int_monotonic_sum_is_stable<T: Integer>(
     t: IntSum<T>,
     bounds: (T, T),
@@ -131,7 +131,7 @@ pub fn int_monotonic_sum_is_stable<T: Integer>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         monotonic_sum_output(t, bounds, x, sx);
@@ -141,7 +141,8 @@ pub fn int_monotonic_sum_is_stable<T: Integer>(
         real_bounds(x@, lo, hi, x@.len());
         real_bounds(y@, lo, hi, y@.len());
         unsized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real(), mag.real());
-        clamped_distance::<T>(isum(x@), isum(y@), o.real())
+        clamped_distance::<T>(isum(x@), isum(y@), o.real());
+        true
     }
 }
 
@@ -152,7 +153,7 @@ pub fn int_monotonic_sum_is_stable<T: Integer>(
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_int_monotonic_sum_is_stable<T: Integer>(
     t: IntSum<T>,
     size: usize,
@@ -163,7 +164,7 @@ pub fn sized_int_monotonic_sum_is_stable<T: Integer>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         monotonic_sum_output(t, bounds, x, sx);
@@ -171,6 +172,7 @@ pub fn sized_int_monotonic_sum_is_stable<T: Integer>(
         real_bounds(x@, lo, hi, x@.len());
         real_bounds(y@, lo, hi, y@.len());
         sized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real());
-        clamped_distance::<T>(isum(x@), isum(y@), o.real())
+        clamped_distance::<T>(isum(x@), isum(y@), o.real());
+        true
     }
 }

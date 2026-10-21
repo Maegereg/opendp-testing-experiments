@@ -48,10 +48,7 @@ pub fn integer_neg<T: Integer>(x: T, y: T) {
 }
 
 /// The real values of a dataset.
-#[logic(open)]
-pub fn reals<T: Integer>(s: Seq<T>) -> Seq<Real> {
-    pearlite! { s.map(|x: T| x.real()) }
-}
+pub use super::float::reals;
 
 /// The (mathematical) sum of the integers in `s`.
 #[logic(open)]

@@ -117,7 +117,6 @@ mod cast;
 pub use cast::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod cast_metric;
 #[cfg(feature = "contrib")]
 pub use cast_metric::*;

@@ -9,7 +9,7 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | Item | Location | Assumed | Justification |
 | --- | --- | --- | --- |
 | `Function::{new, new_fallible, eval, clone}` | `core/mod.rs` | The ghost model (`pre`, `post`) records / replays the contract of the wrapped closure. | The bodies only wrap and call the closure; Creusot cannot see through `dyn Fn`. |
-| `StabilityMap::{new, new_fallible, eval, clone}` | `core/mod.rs` | As above (`post`); the closure must be total. | As above. |
+| `StabilityMap::{new, new_fallible, eval, clone}` | `core/mod.rs` | As above (`post`); the closure must be total on values satisfying their type invariant. | As above. |
 | Float `Inf{Add,Sub,Mul,Div}`, `AlertingAbs`, `Alerting*`, `Saturating*` (`saturating_add_logic` opaque), `Inf{Ln,Log2,Exp,...}`, `InfPowI` | `traits/arithmetic/mod.rs` | The trait contracts (e.g. `inf_add`: `out >= self + v`; `inf_log2`: `out >= log2(self)`). | Implemented with `dashu` arbitrary-precision floats; not verifiable in Creusot. Candidate for testing / Kani. |
 | Accuracy of float `Inf{Add,Sub,Mul,Div}` and `inf_log2` (`RealModel::rounds_close`) | `traits/arithmetic/mod.rs`, `verification/mod.rs` | The result is within `|v| / 2 + 2^-10` of the exact value `v`. Not part of the Proof Definitions (`FINDINGS.md` D4). | Correct directed rounding moves a value by at most one unit in the last place. `true` (no assumption) for other types. |
 | Integer `inf_div` | `traits/arithmetic/mod.rs` | `out >= self / other` (as reals). | `num::Integer::div_ceil` has no specification. Panics on `MIN / -1` (`FINDINGS.md` F1). |
@@ -27,6 +27,10 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `ProductOrd::total_max` | `traits/operations/mod.rs` (trusted module) | Returns one of its arguments, at least as large as both. | Generic comparisons; floats have no sound `DeepModel`. |
 | `AtomDomain::new_closed` | `domains/mod.rs` (trusted module) | On success, the closed bounds are `bounds`, and `lower <= upper`. | Generic comparisons in `Bounds::new`. |
 | `VectorDomain::{new, with_size}` | `domains/mod.rs` | Field values. | Trivial. |
+| `Bounds::get_closed`, `Bounds::closed` | `domains/mod.rs` (trusted module) | On success, returns the bounds' closed model `closed()` (opaque); `AtomDomain::closed_bounds` is defined from it. | Matches on `Bound::Included`; `Bounds<T>` has no deep model. |
+| `Shuffle::shuffle` for `Vec<T>`, `vec_reorders` | `traits/samplers/mod.rs` (trusted module) | On success, the vector is a permutation of its previous contents (`reorders`). | `SliceRandom::shuffle` swaps elements. That the permutation is *uniform* is not stated here (see `shuffle_match`). |
+| `number_clone` | `verification/cast_metric.rs` | Cloning a `Number` returns the same value. | `Number` is implemented by the primitive integers and floats, whose `clone` creusot-std specifies as `*self`; this cannot be stated for a generic `T`. |
+| `shuffle_match` | `verification/cast_metric.rs` | If `x` and `y` are within symmetric distance `d`, every ordering of `x` has an ordering of `y` within insert-delete distance `d`. | Combinatorial, not mechanized: delete `x`'s extra elements, append `y`'s. That the matching is a bijection between orderings, so that uniform shuffles of `x` and `y` couple, is cited from the proof of `make_ordered_random` (Kind C). It turns the matching statement proved for `make_sum` under `SymmetricDistance` (`float_sym_shuffled_stable`) into stability of the randomized output. |
 | `Bounds::eq`, `Column::eq` | `domains/mod.rs`, `data/mod.rs` | Consistent with an (opaque) deep model. | Carriers / type-erased columns have no `DeepModel`. |
 | `Error::verified_new`, `err!` under Creusot | `error/mod.rs` | Builds an error with the given variant. | Message formatting and backtraces are not modeled; under Creusot, `err!` does not evaluate its message arguments. |
 | `int_sum` | `transformations/sum/int/mod.rs` | If every prefix sum is representable, `iter().sum()` returns the exact sum. | `Iterator::sum` for integers adds in order. |
@@ -38,11 +42,13 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 
 ## Skipped (trusted without contracts)
 
-- Modules outside the current scope: `accuracy`, `combinators`, `data`, `interactive`,
-  `measurements`, `measures`, `utilities`, `error`, `domains`, `traits::{cast, operations, samplers}`,
-  and every `transformations` submodule except `sum`.
-- `PrivacyMap` methods, `Function::make_chain`, `StabilityMap::make_chain`,
-  `PrivacyMap::new_from_constant`.
+- Modules outside the current scope: `accuracy`, `data`, `interactive`, `measurements`, `measures`,
+  `utilities`, `error`, `domains`, `traits::{cast, operations, samplers}`, every `combinators`
+  submodule except `chain`, and every `transformations` submodule except `sum` and `cast_metric`.
+- In `combinators::chain`: `make_chain_mt`, `make_chain_pm`, `mismatch_error`, and the `>>` impls
+  involving measurements or functions. In `transformations::cast_metric`: `make_metric_bounded`,
+  `make_metric_unbounded`.
+- `PrivacyMap` methods, `PrivacyMap::new_from_constant`.
 - Integer `alerting_pow`, `neg_inf_div` (no specifications for `checked_pow`,
   `num::Integer::div_floor`).
 - `catch_unwind_silent`, float `ProductOrd::total_cmp`.

@@ -8,10 +8,56 @@ use crate::{
 };
 
 use self::traits::{BoundedMetric, OrderedMetric, UnboundedMetric, UnorderedMetric};
+#[cfg(creusot)]
+use crate::core::Metric;
+#[cfg(creusot)]
+use creusot_std::prelude::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
 pub(crate) mod traits;
+
+/// The contract of `make_ordered_random` on success.
+#[cfg(creusot)]
+#[logic(open, prophetic)]
+pub fn ordered_random_contract<D, MI, MO>(t: Transformation<D, MI, D, MO>) -> bool
+where
+    D: Domain,
+    D::Carrier: Clone + Shuffle,
+    MI: Metric<Distance = IntDistance>,
+    MO: Metric<Distance = IntDistance>,
+{
+    pearlite! {
+        // the function can be evaluated on any dataset,
+        (forall<x: D::Carrier> inv(x) ==> t.function.pre()[x])
+        // and returns a copy of it, in some order
+        && (forall<x: D::Carrier, y: D::Carrier> t.function.post()[x][Ok(y)] ==>
+            inv(y) && exists<c: D::Carrier> <D::Carrier as Clone>::clone.postcondition((&x,), c) && c.reorders(y))
+        // the stability map returns at least d_in
+        && (forall<d: IntDistance, o: IntDistance> t.stability_map.post()[d][Ok(o)] ==> o@ >= d@)
+    }
+}
+
+/// The contract of `make_unordered` on success.
+#[cfg(creusot)]
+#[logic(open, prophetic)]
+pub fn unordered_contract<D, MI, MO>(t: Transformation<D, MI, D, MO>) -> bool
+where
+    D: Domain,
+    D::Carrier: Clone,
+    MI: Metric<Distance = IntDistance>,
+    MO: Metric<Distance = IntDistance>,
+{
+    pearlite! {
+        // the function can be evaluated on any dataset,
+        (forall<x: D::Carrier> inv(x) ==> t.function.pre()[x])
+        // and returns a copy of it
+        && (forall<x: D::Carrier, r: Fallible<D::Carrier>> t.function.post()[x][r] ==>
+            exists<y: D::Carrier> r == Ok(y) && inv(y) && <D::Carrier as Clone>::clone.postcondition((&x,), y))
+        // the stability map returns at least d_in
+        && (forall<d: IntDistance, o: IntDistance> t.stability_map.post()[d][Ok(o)] ==> o@ >= d@)
+    }
+}
 
 #[bootstrap(features("contrib"), generics(D(suppress), MI(suppress)))]
 /// Make a Transformation that converts the unordered dataset metric `SymmetricDistance`
@@ -29,6 +75,8 @@ pub(crate) mod traits;
 /// # Generics
 /// * `D` - Domain
 /// * `MI` - Input Metric
+#[cfg_attr(creusot, ensures(forall<t: Transformation<D, MI, D, MI::OrderedMetric>> result == Ok(t) ==>
+    ordered_random_contract(t)))]
 pub fn make_ordered_random<D, MI>(
     input_domain: D,
     input_metric: MI,
@@ -70,6 +118,8 @@ where
 /// # Generics
 /// * `D` - Domain
 /// * `MI` - Input Metric
+#[cfg_attr(creusot, ensures(forall<t: Transformation<D, MI, D, MI::UnorderedMetric>> result == Ok(t) ==>
+    unordered_contract(t)))]
 pub fn make_unordered<D, MI>(
     input_domain: D,
     input_metric: MI,
@@ -108,6 +158,7 @@ where
 /// # Generics
 /// * `D` - Domain. The function is a no-op so input and output domains are the same.
 /// * `MI` - Input Metric.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_metric_unbounded<D, MI>(
     input_domain: D,
     input_metric: MI,
@@ -154,6 +205,7 @@ where
 /// # Generics
 /// * `D` - Domain
 /// * `MI` - Input Metric
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_metric_bounded<D, MI>(
     input_domain: D,
     input_metric: MI,

@@ -187,7 +187,7 @@ pub mod error;
 
 #[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod accuracy;
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
+// Only `chain` is verified; the other combinators are trusted.
 pub mod combinators;
 pub mod core;
 #[cfg_attr(creusot, creusot_std::macros::trusted)]

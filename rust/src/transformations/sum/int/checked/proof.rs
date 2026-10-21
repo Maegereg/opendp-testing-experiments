@@ -74,14 +74,14 @@ pub fn in_sized_bounded_domain<T: Integer>(x: Vec<T>, size: usize, bounds: (T, T
 #[logic(prophetic)]
 #[requires(sized_int_checked_sum_contract(t, size, bounds))]
 #[requires(inv(x) && in_sized_bounded_domain(x, size, bounds))]
-#[ensures(t.function.pre()[x])]
-#[ensures(forall<r> t.function.post()[x][r] ==> exists<s: T> r == Ok(s) && s.real() == sum(reals(x@)))]
+#[ensures(result && t.function.pre()[x]
+    && forall<r> t.function.post()[x][r] ==> exists<s: T> r == Ok(s) && s.real() == sum(reals(x@)))]
 pub fn sized_int_checked_sum_is_defined<T: Integer>(
     t: SizedIntSum<T>,
     size: usize,
     bounds: (T, T),
     x: Vec<T>,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         // the sum cannot overflow
@@ -92,7 +92,8 @@ pub fn sized_int_checked_sum_is_defined<T: Integer>(
         bounded_sums_fit(x@, lo, hi, bound);
         // the real sum of the dataset is its integer sum
         isum_real(x@);
-        proof_assert!(forall<s: T> s.deep_model() == isum(x@) ==> { integer_real(s); s.real() == sum(reals(x@)) })
+        proof_assert!(forall<s: T> s.deep_model() == isum(x@) ==> { integer_real(s); s.real() == sum(reals(x@)) });
+        true
     }
 }
 
@@ -105,7 +106,7 @@ pub fn sized_int_checked_sum_is_defined<T: Integer>(
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_int_checked_sum_is_stable<T: Integer>(
     t: SizedIntSum<T>,
     size: usize,
@@ -116,13 +117,14 @@ pub fn sized_int_checked_sum_is_stable<T: Integer>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         sized_int_checked_sum_is_defined(t, size, bounds, x);
         sized_int_checked_sum_is_defined(t, size, bounds, y);
         real_bounds(x@, lo, hi, x@.len());
         real_bounds(y@, lo, hi, y@.len());
-        sized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real())
+        sized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real());
+        true
     }
 }

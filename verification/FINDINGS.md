@@ -158,10 +158,13 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 | `dyn Fn` cannot be called or cloned in verified code. | Ghost models with trusted `new`/`eval`. |
 | Float-to-float and int-to-float casts are unsupported. | Trust the code (casts module, float sums' overflow checks). |
 | `Result::map` / `and_then` with closures defeat closure contract inference. | Use `?` instead. |
-| Generic `Clone::clone` has no contract. | Avoid cloning `Copy` values. |
+| Generic `Clone::clone` has no contract. | Avoid cloning `Copy` values; for `Number`s, a trusted lemma that `clone` is the identity (`number_clone`). |
 | Calls to `std` functions without specifications (`format!`, backtraces) are unprovable. | Trusted constructors (e.g. `err!` under Creusot). |
 | Crash (`unreachable!`) in the resolve backend on `dyn Any` types. | Not reported yet; avoided by trusting the code involved. |
-| Lemmas cannot be applied under quantifiers. | State theorems with explicit parameters. |
+| Unit-valued lemmas called under quantifiers (`forall<x> { lemma(x); p(x) }`) are erased, so they rarely apply. | Return `bool` with `#[ensures(result && conclusion)]` and assert `forall<x> h(x) ==> lemma(x)`, with `#[trigger(..)]` on terms the goal contains. |
 | Large conjunctive predicates time out as one goal. | Mark them `inline` so they are split. |
 | A lemma (unit-valued logic function) called in a `proof_assert!` in program code is erased, so its conclusion is not instantiated. | Return `bool` with `#[ensures(result && conclusion)]`, and assert the call. |
 | An impl method without a contract does not inherit its trait method's contract. | Restate the contract on the impl (trusted impls included). |
+| `inline` predicates are expanded in program goals but not in lemma specifications, so a lemma about `contract(t)` does not match a hypothesis that `contract(t)` holds, unless the solver re-folds it (it often cannot after `?`). | Bind the `Result` and assert `forall<t> r == Ok(t) ==> stable(t)` directly; or use a non-`inline` alias of the contract. |
+| Using `Seq::permutation_of` anywhere in a function's context (e.g. through a callee's contract) slowed unrelated real-arithmetic goals until they timed out. | Keep the definition of `reorders` visible only in its module, and reveal it with a lemma where needed. |
+| Goals mentioning a constant (`DEFAULT_SIZE_LIMIT`) in both a hypothesis and a lemma failed to match, where the same goals with a variable succeeded. | Pass the constant as a parameter to the lemmas and instantiate it at the call site. |

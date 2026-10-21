@@ -1,4 +1,5 @@
 #[cfg(feature = "partials")]
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod partials;
 
 use crate::{
@@ -7,7 +8,11 @@ use crate::{
 };
 use std::ops::Shr;
 
+#[cfg(creusot)]
+use super::is_chain_tt;
 use super::{make_chain_mt, make_chain_pm, make_chain_tt};
+#[cfg(creusot)]
+use creusot_std::prelude::*;
 
 // CHAINING TRANSFORMATION WITH TRANSFORMATION
 // There are seven impls:
@@ -35,6 +40,8 @@ where
 {
     type Output = Fallible<Transformation<DI, MI, DO, MO>>;
 
+    #[cfg_attr(creusot, ensures(forall<t: Transformation<DI, MI, DO, MO>> result == Ok(t) ==>
+        is_chain_tt(t, rhs, self)))]
     fn shr(self, rhs: Transformation<DX, MX, DO, MO>) -> Self::Output {
         make_chain_tt(&rhs, &self)
     }
@@ -56,6 +63,8 @@ where
 {
     type Output = Fallible<Transformation<DI, MI, DO, MO>>;
 
+    #[cfg_attr(creusot, ensures(forall<t: Transformation<DI, MI, DO, MO>> result == Ok(t) ==>
+        exists<t0: Transformation<DI, MI, DX, MX>> self == Ok(t0) && is_chain_tt(t, rhs, t0)))]
     fn shr(self, rhs: Transformation<DX, MX, DO, MO>) -> Self::Output {
         make_chain_tt(&rhs, &self?)
     }
@@ -86,6 +95,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Measurement<DX, MX, MO, TO>) -> Self::Output {
         make_chain_mt(&rhs, &self)
     }
@@ -106,6 +116,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Measurement<DX, MX, MO, TO>) -> Self::Output {
         make_chain_mt(&rhs, &self?)
     }
@@ -133,6 +144,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Function<TX, TO>) -> Self::Output {
         make_chain_pm(&rhs, &self)
     }
@@ -150,6 +162,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Function<TX, TO>) -> Self::Output {
         make_chain_pm(&rhs, &self?)
     }
@@ -172,6 +185,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, DO::Carrier>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Transformation<DX, MTI, DO, MTO>) -> Self::Output {
         make_chain_pm(&rhs.function, &self)
     }
@@ -194,6 +208,7 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, DO::Carrier>>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Transformation<DX, MTI, DO, MTO>) -> Self::Output {
         make_chain_pm(&rhs.function, &self?)
     }
@@ -208,6 +223,7 @@ where
 {
     type Output = Function<TI, TO>;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn shr(self, rhs: Function<TX, TO>) -> Self::Output {
         Function::make_chain(&rhs, &self)
     }

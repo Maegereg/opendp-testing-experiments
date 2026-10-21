@@ -17,13 +17,13 @@ use super::{Float, Pairwise, Sequential, SumRelaxation};
 use crate::verification::{
     RealModel,
     dataset::sum,
-    float::{abs_sum, float_in_bounds, reals},
+    float::{abs_sum, float_in_bounds, mag, reals},
     real_abs,
 };
 #[cfg(creusot)]
 use creusot_std::{
     logic::{Seq, real::Real},
-    macros::{ensures, logic, trusted},
+    macros::{ensures, logic, proof_assert, trusted},
 };
 
 #[cfg(creusot)]
@@ -96,6 +96,8 @@ where
         .inf_sub(&lower)?
         .total_max(lower.alerting_abs()?.total_max(upper)?)?;
     let relaxation = S::relaxation(size_limit, lower, upper)?;
+    #[cfg(creusot)]
+    proof_assert!(ideal_sensitivity.real() >= mag(lower.real(), upper.real()));
 
     Transformation::new(
         VectorDomain::new(AtomDomain::new_closed(bounds)?),

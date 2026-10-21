@@ -135,7 +135,7 @@ pub fn float_sum_error<S: UncheckedSum>(
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_float_checked_sum_is_stable<S: UncheckedSum>(
     t: FloatSum<S::Item>,
     size: usize,
@@ -146,7 +146,7 @@ pub fn sized_float_checked_sum_is_stable<S: UncheckedSum>(
     sx: S::Item,
     sy: S::Item,
     o: S::Item,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         let e = such_that(|e: Real|
@@ -155,7 +155,8 @@ pub fn sized_float_checked_sum_is_stable<S: UncheckedSum>(
                 o.real() >= Real::from_int(d@ / 2) * (hi.real() - lo.real()) + e + e);
         float_sum_error::<S>(size, bounds, e, x@, sx);
         float_sum_error::<S>(size, bounds, e, y@, sy);
-        sized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real())
+        sized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real());
+        true
     }
 }
 
@@ -172,7 +173,7 @@ pub fn sized_float_checked_sum_is_stable<S: UncheckedSum>(
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn float_checked_sum_is_stable<S: UncheckedSum>(
     t: FloatSum<S::Item>,
     size_limit: usize,
@@ -183,7 +184,7 @@ pub fn float_checked_sum_is_stable<S: UncheckedSum>(
     sx: S::Item,
     sy: S::Item,
     o: S::Item,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         let m = mag(lo.real(), hi.real());
@@ -193,6 +194,7 @@ pub fn float_checked_sum_is_stable<S: UncheckedSum>(
                 o.real() >= Real::from_int(d@) * m + e + e);
         float_sum_error::<S>(size_limit, bounds, e, x@, sx);
         float_sum_error::<S>(size_limit, bounds, e, y@, sy);
-        unsized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real(), m)
+        unsized_sum_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real(), m);
+        true
     }
 }

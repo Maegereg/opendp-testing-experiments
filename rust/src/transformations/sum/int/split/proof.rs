@@ -129,7 +129,7 @@ pub fn split_sum_output<T: Integer>(t: IntSum<T>, bounds: (T, T), x: Vec<T>, s: 
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn int_split_sum_is_stable<T: Integer + SplitSatSum>(
     t: IntSum<T>,
     bounds: (T, T),
@@ -139,7 +139,7 @@ pub fn int_split_sum_is_stable<T: Integer + SplitSatSum>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         split_sum_output(t, bounds, x, sx);
@@ -149,7 +149,8 @@ pub fn int_split_sum_is_stable<T: Integer + SplitSatSum>(
         real_bounds(x@, lo, hi, x@.len());
         real_bounds(y@, lo, hi, y@.len());
         unsized_split_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real(), mag.real());
-        split_distance::<T>(isum_neg(x@), isum_pos(x@), isum_neg(y@), isum_pos(y@), o.real())
+        split_distance::<T>(isum_neg(x@), isum_pos(x@), isum_neg(y@), isum_pos(y@), o.real());
+        true
     }
 }
 
@@ -160,7 +161,7 @@ pub fn int_split_sum_is_stable<T: Integer + SplitSatSum>(
 #[requires(sym_close(reals(x@), reals(y@), d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_int_split_sum_is_stable<T: Integer + SplitSatSum>(
     t: IntSum<T>,
     size: usize,
@@ -171,7 +172,7 @@ pub fn sized_int_split_sum_is_stable<T: Integer + SplitSatSum>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         split_sum_output(t, bounds, x, sx);
@@ -179,6 +180,7 @@ pub fn sized_int_split_sum_is_stable<T: Integer + SplitSatSum>(
         real_bounds(x@, lo, hi, x@.len());
         real_bounds(y@, lo, hi, y@.len());
         sized_split_sensitivity(reals(x@), reals(y@), d@, lo.real(), hi.real());
-        split_distance::<T>(isum_neg(x@), isum_pos(x@), isum_neg(y@), isum_pos(y@), o.real())
+        split_distance::<T>(isum_neg(x@), isum_pos(x@), isum_neg(y@), isum_pos(y@), o.real());
+        true
     }
 }

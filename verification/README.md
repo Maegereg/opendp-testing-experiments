@@ -17,12 +17,16 @@ Requirements:
 
 ```sh
 export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
-tools/creusot.sh 'transformations::sum::*' 'verification::*' 'traits::*'   # the verified components
-tools/creusot.sh 'transformations::sum::int::checked::*'                   # one module
+# the verified components
+tools/creusot.sh 'transformations::sum::*' 'transformations::cast_metric::*' 'combinators::chain::*' \
+  'verification::*' 'traits::*' 'domains::*' \
+  'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*'
+tools/creusot.sh 'transformations::sum::int::checked::*'   # one module
 ```
 
-A run without a filter also covers code outside the verified components that is not yet marked
-trusted, and reports failures there: `Debug` impls, `invoke`, and `PartialEq` for metrics.
+The last two filters select `Function::make_chain` and `StabilityMap::make_chain` (Creusot numbers
+impl blocks). `'core::*'` also reports six failures in `Debug` impls and `invoke`, which are outside
+the verified components, as does a run without a filter (plus `PartialEq` for metrics).
 
 Lean (`verification/lean`, Mathlib v4.35.0, toolchain pinned by `lean-toolchain`):
 
@@ -65,7 +69,7 @@ only a dependency under `cfg(creusot)`.
 | `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_float_checked_sum` | Verified: contracts and stability theorems (sized; unsized for datasets of at most `size_limit` values). Error bound computation verified; summation error bounds cited; overflow check proved in Lean. |
 | `make_(sized_)bounded_float_ordered_sum` | `Sequential`: verified, contracts and stability theorems (sized; unsized for datasets of at most `size_limit` values), with the rounding error bound proved in Lean. `Pairwise`: contracts verified; **not stable** (`FINDINGS.md` F2). |
-| `make_sum` (dispatch) | Not started |
+| `make_sum` (dispatch) | Verified, after switching its saturating float branches to `Sequential` (F2): every branch returns a stable transformation, for all 14 types and both metrics. Under `SymmetricDistance`, the shuffled float branches are stable up to a matching of the shuffles, which is cited for uniform shuffles. |
 
 ### `make_sized_bounded_int_checked_sum`
 
@@ -206,11 +210,12 @@ compares it with the exact sum clamped at every step, `csum`:
    brute-force search over clamped integer sums found no counterexample with truncation either.
 
 The same searches found that **pairwise** saturating sums are not stable. Removing one element
-regroups the rest, and clamping depends on the grouping (`FINDINGS.md` F2). `make_sum` uses them
-for `f32` and `f64` whenever the checked sum could overflow, which breaks stability under
-`InsertDeleteDistance`. Under `SymmetricDistance`, `make_sum` shuffles first: the proof no
-longer goes through, but an exact search found no neighbouring pair whose shuffled outputs cannot
-be coupled within the map (`scripts/pairwise_ordered_sum_shuffled.py`).
+regroups the rest, and clamping depends on the grouping (`FINDINGS.md` F2). `make_sum` used them
+for `f32` and `f64` whenever the checked sum could overflow, which broke stability under
+`InsertDeleteDistance`; it now uses sequential summation there (below). Under `SymmetricDistance`,
+`make_sum` shuffles first: the proof no longer went through, but an exact search found no
+neighbouring pair whose shuffled outputs cannot be coupled within the map
+(`scripts/pairwise_ordered_sum_shuffled.py`).
 
 Mutation checks: each of the following makes verification fail:
 - `d_in / 3` in the sized map;
@@ -219,6 +224,51 @@ Mutation checks: each of the following makes verification fail:
 
 Code changes: none (contracts only). The sequential `error_bound` is now `n u a`, weaker than the
 cited `(n - 1) u a`, so that it also bounds the saturating sum.
+
+### `make_sum` (dispatch)
+
+Proved (`rust/src/transformations/sum/proof.rs`): for every integer and float type and both input
+metrics, if `make_sum(input_domain, input_metric)` returns `Ok(t)`, then `t` is stable on
+`input_domain` (`MakeSum::sum_is_stable`). The input domain is the vectors whose elements lie
+within the domain's closed bounds (and, for floats, are finite), with the domain's size if it is
+known; for unsized float sums, of at most `DEFAULT_SIZE_LIMIT` (`2^20`) values, as for the leaves.
+
+1. **Each branch returns a verified sum.** Lifting lemmas turn each sum's contract and stability
+   theorem into the property for `make_sum` (`int_sym_stable`, `int_id_stable`,
+   `float_sym_stable`, `float_id_stable`).
+2. **Chaining** (`combinators/chain`, `core/mod.rs`): `make_chain_tt` and `>>` on transformations
+   are verified. The chained function runs one function, then the other, and the chained map
+   composes the maps. `Function::make_chain` and `StabilityMap::make_chain` were trusted; they now
+   call `eval` on the wrapped functions, which is verified (same behavior).
+3. **`make_unordered`** (`transformations/cast_metric`) copies its input and maps `d` to at least
+   `d`. Insert-delete neighbours are symmetric neighbours (`verification/cast_metric.rs`,
+   `id_close_sym_close`), so `make_unordered >> (checked sum)` is stable under
+   `InsertDeleteDistance`.
+4. **`make_ordered_random`** returns a permutation of its input (trusted `Shuffle` contract) and
+   maps `d` to at least `d`. Its output is random, so the theorem for
+   `make_ordered_random >> (sequential saturating sum)` under `SymmetricDistance` is a matching
+   (`float_sym_shuffled_stable`):
+   - every output is the saturating sum of some ordering of the input;
+   - for neighbours `x`, `y` within `d`, every ordering of `x` is matched with an ordering of `y`
+     whose sum is within the map at `d`.
+
+   The matching uses `shuffle_match` (trusted, `TRUST.md`): orderings of symmetric neighbours can be
+   matched within insert-delete distance `d`. Stability of the randomized output then needs this
+   matching to couple a uniform shuffle of `x` with one of `y`, which is cited from the proof of
+   `make_ordered_random`, not mechanized.
+
+Code changes:
+- The four saturating float branches use `Sequential` instead of `Pairwise` (the fix for F2,
+  with a regression test).
+- The dispatcher's branches move from the two macros into four generic functions (integers and
+  floats, times the two metrics). The macro impls delegate to them, so each is verified once
+  rather than per type.
+- The chained branches bind the two transformations before `>>`, with the same evaluation order.
+
+Mutation checks: each of the following makes verification fail:
+- one saturating float branch reverted to `Pairwise`;
+- `make_unordered`'s map returning `d_in / 2`;
+- `make_ordered_random`'s map scaled by 0, or its function not shuffling.
 
 ### `can_float_sum_overflow` (Lean)
 

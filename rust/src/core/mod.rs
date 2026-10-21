@@ -36,6 +36,7 @@ use crate::verification::{MaybeDeepModel, RealModel};
 use creusot_std::{
     logic::{Mapping, real::Real},
     macros::{ensures, logic, requires, trusted},
+    prelude::inv,
     std::ops::{FnExt, FnOnceExt},
 };
 use num::Zero;
@@ -136,15 +137,31 @@ impl<TI, TO> Function<TI, TO> {
     }
 }
 
+#[cfg(creusot)]
+impl<TI, TO> Function<TI, TO> {
+    /// `self` evaluates `function0`, then `function1` on its result.
+    #[logic(open, prophetic)]
+    pub fn is_chain<TX>(self, function1: Function<TX, TO>, function0: Function<TI, TX>) -> bool {
+        pearlite! {
+            (forall<a: TI> inv(a) && function0.pre()[a]
+                && (forall<x: TX> function0.post()[a][Ok(x)] ==> function1.pre()[x])
+                ==> self.pre()[a])
+            && (forall<a: TI, r: Fallible<TO>> self.post()[a][r] ==>
+                (exists<e: Error> r == Err(e) && function0.post()[a][Err(e)])
+                || (exists<x: TX> function0.post()[a][Ok(x)] && function1.post()[x][r]))
+        }
+    }
+}
+
 impl<TI: 'static, TO: 'static> Function<TI, TO> {
-    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result.is_chain(*function1, *function0)))]
     pub fn make_chain<TX: 'static>(
         function1: &Function<TX, TO>,
         function0: &Function<TI, TX>,
     ) -> Function<TI, TO> {
-        let function0 = function0.function.clone();
-        let function1 = function1.function.clone();
-        Self::new_fallible(move |arg| function1(&function0(arg)?))
+        let function0 = function0.clone();
+        let function1 = function1.clone();
+        Self::new_fallible(move |arg| function1.eval(&function0.eval(arg)?))
     }
 }
 
@@ -258,7 +275,7 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
 
 impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
     #[cfg_attr(creusot, trusted)]
-    #[cfg_attr(creusot, requires(forall<d: MI::Distance> map.precondition((&d,))))]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> inv(d) ==> map.precondition((&d,))))]
     #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: MO::Distance>
         result.post()[d][Ok(r)] == map.postcondition((&d,), r)))]
     #[cfg_attr(creusot, ensures(forall<d: MI::Distance, e: Error> !result.post()[d][Err(e)]))]
@@ -266,7 +283,7 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
         StabilityMap(Arc::new(move |d_in: &MI::Distance| Ok(map(d_in))))
     }
     #[cfg_attr(creusot, trusted)]
-    #[cfg_attr(creusot, requires(forall<d: MI::Distance> map.precondition((&d,))))]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> inv(d) ==> map.precondition((&d,))))]
     #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: Fallible<MO::Distance>>
         result.post()[d][r] == map.postcondition((&d,), r)))]
     pub fn new_fallible(
@@ -303,14 +320,15 @@ impl<MI: Metric, MO: Metric> StabilityMap<MI, MO> {
 }
 
 impl<MI: 'static + Metric, MO: 'static + Metric> StabilityMap<MI, MO> {
-    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, o: MO::Distance> result.post()[d][Ok(o)] ==>
+        exists<x: MX::Distance> map0.post()[d][Ok(x)] && map1.post()[x][Ok(o)]))]
     pub fn make_chain<MX: 'static + Metric>(
         map1: &StabilityMap<MX, MO>,
         map0: &StabilityMap<MI, MX>,
     ) -> Self {
-        let map1 = map1.0.clone();
-        let map0 = map0.0.clone();
-        StabilityMap(Arc::new(move |d_in: &MI::Distance| map1(&map0(d_in)?)))
+        let map1 = map1.clone();
+        let map0 = map0.clone();
+        StabilityMap::new_fallible(move |d_in: &MI::Distance| map1.eval(&map0.eval(d_in)?))
     }
 }
 

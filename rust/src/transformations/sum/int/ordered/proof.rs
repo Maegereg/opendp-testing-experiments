@@ -75,7 +75,7 @@ pub fn sized_int_ordered_sum_contract<T: Integer>(
 #[requires(id_close(x@, y@, d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn int_ordered_sum_is_stable<T: Integer>(
     t: OrderedIntSum<T>,
     bounds: (T, T),
@@ -85,7 +85,7 @@ pub fn int_ordered_sum_is_stable<T: Integer>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         integer_real(lo);
@@ -98,7 +98,8 @@ pub fn int_ordered_sum_is_stable<T: Integer>(
         integer_real(mag);
         unsized_sat_sum_sensitivity(x@, y@, d@, lo.deep_model(), hi.deep_model(), mag.deep_model());
         proof_assert!(Real::from_int(d@) * Real::from_int(mag.deep_model()) == Real::from_int(d@ * mag.deep_model()));
-        proof_assert!(sx.real() - sy.real() == Real::from_int(sat_sum(x@) - sat_sum(y@)))
+        proof_assert!(sx.real() - sy.real() == Real::from_int(sat_sum(x@) - sat_sum(y@)));
+        true
     }
 }
 
@@ -110,7 +111,7 @@ pub fn int_ordered_sum_is_stable<T: Integer>(
 #[requires(id_close(x@, y@, d@))]
 #[requires(t.function.post()[x][Ok(sx)] && t.function.post()[y][Ok(sy)])]
 #[requires(t.stability_map.post()[d][Ok(o)])]
-#[ensures(real_abs(sx.real() - sy.real()) <= o.real())]
+#[ensures(result && real_abs(sx.real() - sy.real()) <= o.real())]
 pub fn sized_int_ordered_sum_is_stable<T: Integer>(
     t: OrderedIntSum<T>,
     size: usize,
@@ -121,7 +122,7 @@ pub fn sized_int_ordered_sum_is_stable<T: Integer>(
     sx: T,
     sy: T,
     o: T,
-) {
+) -> bool {
     pearlite! {
         let (lo, hi) = bounds;
         integer_real(lo);
@@ -131,6 +132,7 @@ pub fn sized_int_ordered_sum_is_stable<T: Integer>(
         sized_sat_sum_sensitivity(x@, y@, d@, lo.deep_model(), hi.deep_model());
         proof_assert!(Real::from_int(d@ / 2) * (hi.real() - lo.real())
             == Real::from_int((d@ / 2) * (hi.deep_model() - lo.deep_model())));
-        proof_assert!(sx.real() - sy.real() == Real::from_int(sat_sum(x@) - sat_sum(y@)))
+        proof_assert!(sx.real() - sy.real() == Real::from_int(sat_sum(x@) - sat_sum(y@)));
+        true
     }
 }
