@@ -4,6 +4,8 @@
 `clamp(a + b, -MAX, MAX)`, over the pairwise split `n // 2`. Deleting or inserting one element
 changes every later split, which regroups the elements, and clamping depends on the grouping.
 See FINDINGS.md, F2. Python floats are IEEE binary64, like Rust's `f64`.
+`rust/src/transformations/sum/test.rs` (`test_make_sum_float_pairwise_unstable`) runs the first two
+examples against OpenDP's `make_sum`.
 
     python3 verification/scripts/pairwise_ordered_sum_counterexample.py
 """
@@ -36,16 +38,32 @@ def report(name, x, y, d_out):
     assert diff_half > d_out / 2
 
 
-# Unsized (make_sum on InsertDeleteDistance): bounds [-k, k], y = x without its last element (d_in = 1).
-# The stability map is d_in * max(U - L, |L|, U) + relaxation = 2k + (a relative 1e-8 or less).
+def make_sum_accepts(lower, upper):
+    # make_sum's overflow check rounds max(|L|, U) up to a power of two, which must be finite,
+    # and the stability map needs U - L to be finite
+    return max(-lower, upper) <= 2.0 ** 1023 and upper - lower <= MAX
+
+
+# The relaxation terms below are a relative 1e-8 or less of the map, so they are left out.
+
+# Unsized (make_sum on InsertDeleteDistance): bounds [-k, 2k], y = x without x[0] (d_in = 1).
+# The stability map is d_in * max(U - L, |L|, U) + relaxation ~ 3k.
 k = MAX / 4.001
+assert make_sum_accepts(-k, 2 * k)
+x = [v * k for v in [2, -1, -1, 2, 2, 2, 0, -1, -1, -1, -1]]
+report("unsized (11)", x, x[1:], 3 * k * (1 + 1e-6))
+
+# Sized (make_sum, size 10): bounds [-k, k], y = x without x[9] and with k inserted at the front
+# (d_in = 2). The stability map is (d_in / 2) * (U - L) + relaxation ~ 2k.
+k = MAX / 2.001
+assert make_sum_accepts(-k, k)
+x = [v * k for v in [-1, -1, 1, 1, 1, 1, -1, -1, -1, -1]]
+report("sized (10)", x, [k] + x[:-1], 2 * k * (1 + 1e-6))
+
+# The largest factor found (~2), unsized: bounds [-k, k], y = x without its last element (d_in = 1).
+# The stability map is d_in * max(U - L, |L|, U) + relaxation ~ 2k.
+k = MAX / 4.001
+assert make_sum_accepts(-k, k)
 x = [v * k for v in [-1, -1, -1, 0, -1, -1, 0, 1, 1, -1, -1, 1, 0, 1, 1, -1,
                      1, 1, 0, 1, 1, 1, 1, 1, 0, -1, -1, 1, -1, 0, -1, -1]]
-report("unsized", x, x[:-1], 2 * k * (1 + 1e-6))
-
-# Sized (size 6): bounds [-k, 2k], y = x with its first element deleted and 2k inserted (d_in = 2).
-# The stability map is (d_in / 2) * (U - L) + relaxation = 3k + (a relative 1e-14 or less).
-k = MAX / 3.001
-x = [v * k for v in [-1, 2, 2, -1, -1, -1]]
-y = [v * k for v in [2, 2, -1, 2, -1, -1]]
-report("sized", x, y, 3 * k * (1 + 1e-6))
+report("unsized (32)", x, x[:-1], 2 * k * (1 + 1e-6))

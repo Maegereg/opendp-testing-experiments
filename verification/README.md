@@ -207,7 +207,11 @@ compares it with the exact sum clamped at every step, `csum`:
 
 The same searches found that **pairwise** saturating sums are not stable. Removing one element
 regroups the rest, and clamping depends on the grouping (`FINDINGS.md` F2). `make_sum` uses them
-for `f32` and `f64` whenever the checked sum could overflow.
+for `f32` and `f64` whenever the checked sum could overflow;
+`test_make_sum_float_pairwise_unstable` (`rust/src/transformations/sum/test.rs`) reproduces this
+under `InsertDeleteDistance`. Under `SymmetricDistance`, `make_sum` shuffles first: the proof no
+longer goes through, but an exact search found no neighbouring pair whose shuffled outputs cannot
+be coupled within the map (`scripts/pairwise_ordered_sum_shuffled.py`).
 
 Mutation checks: each of the following makes verification fail:
 - `d_in / 3` in the sized map;

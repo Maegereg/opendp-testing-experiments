@@ -28,22 +28,53 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   The map's derivation compares with the ideal sum (`|BS*(v) - BS(v)| <= error`), but a saturated
   sum can be arbitrarily far from the ideal sum. Clamping depends on how elements are grouped, and
   inserting or deleting one element shifts every later split point, regrouping the elements after
-  it. For `f64` and `k = MAX / 4.001`:
-  - With bounds `[-k, k]`, deleting the last element of a 32-element dataset changes the output of
-    `make_sum(VectorDomain::new(AtomDomain::new_closed((-k, k))?), InsertDeleteDistance)` by
-    `3.6e308`. Its `map(&1)` is `1.8e308`.
-  - In the sized case, with 6 elements in `[-k', 2k']` and `k' = MAX / 3.001`, one deletion plus one
-    insertion (`d_in = 2`) changes the output by `4/3` of the map.
+  it. For `f64`, through `make_sum(domain, InsertDeleteDistance)`, the shortest examples found are:
+  - Unsized, bounds `[-k, 2k]` with `k = MAX / 4.001`: deleting the first element of the
+    11-element `[2, -1, -1, 2, 2, 2, 0, -1, -1, -1, -1] * k` changes the output by `1.80e308`
+    (`2k` to `-1.999k`). Its `map(&1)` is `1.35e308` (`~3k`), a factor of `1.333`.
+  - Sized (10), bounds `[-k, k]` with `k = MAX / 2.001`: deleting the last element of
+    `[-1, -1, 1, 1, 1, 1, -1, -1, -1, -1] * k` and inserting `k` at the front (`d_in = 2`) changes
+    the output by `2.69e308` (`-2k` to `0.999k`). Its `map(&2)` is `1.80e308` (`~2k`), a factor of
+    `1.4995`.
+
+  The largest factor found is `1.999`: with bounds `[-k, k]` and `k = MAX / 4.001`, deleting the
+  last element of a 32-element dataset. `make_sum` only accepts bounds with
+  `max(|L|, U) <= 2^1023` (its overflow check rounds `max(|L|, U)` up to a power of two) and
+  `U - L` is finite. The constructors themselves accept wider bounds, such as a 6-element sized
+  example in `[-k, 2k]` with `k = MAX / 3.001`, off by `4/3`.
 - **How found:** While specifying the ordered sums, the derivation in the code comment did not
   account for saturation. An exhaustive search over clamped integer sums (`[-C, C]` in place of
-  `[MIN, MAX]`) then found counterexamples for pairwise summation only. A test against OpenDP
-  confirmed them, and `scripts/pairwise_ordered_sum_counterexample.py` reproduces them.
-- **Impact:** The stability map, and so the privacy guarantee of any downstream mechanism,
-  underestimates the change in the output. The worst example found is off by a factor of 2; the
-  searches were small, so larger factors are not ruled out. It only happens when sums saturate,
-  so values must be large: up to `size_limit` of them must sum to `MAX`. That is exactly when
-  `make_sum` chooses this sum. Under `SymmetricDistance`, `make_sum` shuffles first, so the
-  violation holds for a fraction of the orderings rather than all of them.
+  `[MIN, MAX]`) then found counterexamples for pairwise summation only. A second exhaustive search,
+  over integer multiples of `k` within `make_sum`'s limits on the bounds, found the short examples
+  above. Nothing shorter exists on the grids searched: unsized with bounds `[-1, 1]`, `[-1, 2]` and
+  `[-2, 3]`; sized with `[-1, 1]`, and up to 8 and 7 elements with `[-1, 2]` and `[-2, 3]`.
+  `rust/src/transformations/sum/test.rs` (`test_make_sum_float_pairwise_unstable`) reproduces them
+  against OpenDP, and `scripts/pairwise_ordered_sum_counterexample.py` in Python.
+- **Impact:** It only happens when sums saturate, so values must be large: up to `size_limit` of
+  them must sum to `MAX`. That is exactly when `make_sum` chooses this sum. The impact depends on
+  how the data's order is chosen:
+  - **Broken: `make_sum` under `InsertDeleteDistance`, and direct calls to
+    `make_(sized_)bounded_float_ordered_sum::<Pairwise<T>>`.** The caller's order is used as-is.
+    The stability map, and so the privacy guarantee of any downstream mechanism, underestimates the
+    change in the output. The worst example found is off by a factor of 2; the searches were
+    small, so larger factors are not ruled out.
+  - **Unproven, no counterexample: `make_sum` under `SymmetricDistance`.** `make_sum` shuffles
+    first (`make_ordered_random`), so the output is random. Its justification chains the shuffle
+    (symmetric distance `d` to insert-delete distance `d`) with the ordered sum's stability for
+    every ordered pair, which is false, so the guarantee is not proved. But the property it needs
+    appears to hold: stability of a randomized transformation means a coupling of the outputs on
+    neighbouring datasets within the map (`W_inf <= map`), which suffices for noise calibrated to
+    the map. On the F2 examples, the natural coupling (shuffle `x`, delete the same element)
+    violates the map for 0.11% of orderings (11 elements), but the optimal coupling gives
+    `W_inf = 0.67 x map` (11 elements) and `0.5 x map` (32 elements), and `Laplace(map / eps)` loses
+    at most `0.64 eps` and `0.43 eps` (for `eps` in `{0.1, 1, 5}`). An exact search over every
+    multiset of integer multiples of `k` found no neighbouring pair with `W_inf > map` or a Laplace
+    loss above `eps`: unsized up to 48 values in `[-1, 1]`, 24 in `[-1, 2]` and 16 in `[-2, 2]`;
+    sized up to 40 values in `[-1, 1]` and 20 in `[-1, 2]`, all at `make_sum`'s smallest accepted
+    `MAX`; and at larger `MAX` (up to `6.001`) for up to 20-40 values
+    (`scripts/pairwise_ordered_sum_shuffled.py`). This uses real arithmetic and assumes a uniform
+    shuffle; the worst `W_inf` found is exactly the map, from pairs that never saturate, so there is
+    no margin beyond the relaxation for rounding.
 - **Fix:** Use sequential summation when saturating. The sequential saturating sum of integers is
   proved stable under insertion and deletion (the integer ordered sums), and the same search found
   no counterexample for sequential summation. Alternatively, keep pairwise summation with a
