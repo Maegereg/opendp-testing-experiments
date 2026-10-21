@@ -85,6 +85,34 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   above; it fails before the fix. `Pairwise<T>` is still the default `S` of the ordered sum
   constructors when called directly, and remains unstable there.
 
+### F3. `make_clamp` on pairs fails depending on the data
+
+- **Where:** `rust/src/transformations/clamp/mod.rs` (`make_clamp`), with the atom type `(f32, f32)`
+  or `(f64, f64)`; `rust/src/traits/operations/mod.rs`, `impl ProductOrd for (T1, T2)`.
+- **What:** `ProductOrd` is documented as "well-defined on types that are Ord on their non-null
+  values", and `make_clamp`'s proof (`make_clamp.tex`) relies on this. But the pair impl is the
+  componentwise (product) order, so two non-null pairs may be incomparable, and then `total_cmp`
+  returns `Err`. `Bounds::new_closed` checks the bounds with `PartialOrd`, which on pairs is
+  lexicographic. With a non-NaN `VectorDomain<AtomDomain<(f64, f64)>>`:
+  - Bounds `((0, 10), (1, 0))` are accepted, as `(0, 10) < (1, 0)` lexicographically. The
+    transformation returns `Ok([])` on the empty dataset and `Err` on every other dataset, because
+    each row first compares the bounds themselves.
+  - Bounds `((0, 0), (10, 10))` are fine, but the row `(-1, 20)` is incomparable with `(0, 0)`, so
+    any dataset containing it gives `Err("unknown ordering ...")`, while `(1, 2)` gives `Ok`.
+- **How found:** Specifying `ProductOrd` for the proof of `make_clamp`. The contract "`total_cmp`
+  succeeds on non-null values" could not be proved for the pair impl, so the model records whether
+  a type's order is total (`ProductOrd::total`), which is false for pairs. `make_clamp`'s success
+  on every non-null dataset is then proved only for total orders. Confirmed by running both
+  examples.
+- **Impact:** A transformation whose function fails depending on the data. Whether it fails reveals
+  whether some row is incomparable with the bounds, and the output is not in the output domain.
+  Reachable only from Rust: the FFI dispatches `make_clamp` on numeric types only.
+- **Fix:** Restrict `make_clamp` (and `ProductOrd`) to totally ordered types, or clamp pairs
+  componentwise. Checking the bounds with `ProductOrd` at construction fixes the first example only.
+- **Status:** On this branch, `make_clamp` checks the bounds with `total_gt` at construction, so
+  the first example is rejected when the transformation is built
+  (`test_make_clamp_rejects_unordered_pair_bounds`). The second remains.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`
@@ -165,6 +193,9 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 | Large conjunctive predicates time out as one goal. | Mark them `inline` so they are split. |
 | A lemma (unit-valued logic function) called in a `proof_assert!` in program code is erased, so its conclusion is not instantiated. | Return `bool` with `#[ensures(result && conclusion)]`, and assert the call. |
 | An impl method without a contract does not inherit its trait method's contract. | Restate the contract on the impl (trusted impls included). |
+| Laws (`#[logic(law)]`) cannot have generic parameters, and were not available as axioms in a trait's default method (`total_clamp`). | Bool-valued lemma methods (`ProductOrd::ple_refl`, `EventModel::close_map`) that every impl proves, called explicitly. |
+| The inferred precondition of a closure includes the type invariants of its arguments. | State function preconditions for values satisfying `inv(x)`. |
+| Contracts written in a `#[trusted]` module are assumed without warning (by design), which is easy to miss when adding contracts to existing code: the new `ProductOrd` contracts were at first assumed, and a mutation check exposed it. | Untrust modules whose contracts the proofs rely on, and trust their other items individually. |
 | `inline` predicates are expanded in program goals but not in lemma specifications, so a lemma about `contract(t)` does not match a hypothesis that `contract(t)` holds, unless the solver re-folds it (it often cannot after `?`). | Bind the `Result` and assert `forall<t> r == Ok(t) ==> stable(t)` directly; or use a non-`inline` alias of the contract. |
 | Using `Seq::permutation_of` anywhere in a function's context (e.g. through a callee's contract) slowed unrelated real-arithmetic goals until they timed out. | Keep the definition of `reorders` visible only in its module, and reveal it with a lemma where needed. |
 | Goals mentioning a constant (`DEFAULT_SIZE_LIMIT`) in both a hypothesis and a lemma failed to match, where the same goals with a variable succeeded. | Pass the constant as a parameter to the lemmas and instantiate it at the call site. |

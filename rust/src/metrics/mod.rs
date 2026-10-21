@@ -747,7 +747,10 @@ mod microdata {
         type EventMetric: EventLevelMetric;
     }
 
-    pub trait EventLevelMetric: MicrodataMetric + Default {}
+    pub trait EventLevelMetric:
+        MicrodataMetric + Default + crate::verification::MaybeEventModel
+    {
+    }
 }
 impl MicrodataMetric for SymmetricDistance {
     const SIZED: bool = false;

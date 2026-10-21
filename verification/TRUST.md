@@ -24,8 +24,13 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `CanFloatSumOverflow::can_float_sum_overflow` (`Sequential`, `Pairwise`) | `transformations/sum/float/checked/mod.rs` | `Ok(false)` implies that summing at most `size` finite values within `bounds` does not overflow (`sum_finite`, opaque). | Proved in Lean (below). `sum_finite` corresponds to `seqSum` / `pwSum` not overflowing; the correspondence is by name. |
 | Signed integer `alerting_abs` | `traits/arithmetic/mod.rs` | `out = |self|`. | Wraps `checked_abs`, which `creusot-std` does not specify. |
 | `InfCast`, `ExactIntCast` (all impls) | `traits/cast/mod.rs` (trusted module) | `inf_cast`: `out >= v`; `neg_inf_cast`: `out <= v`; `exact_int_cast`: `out = v`. | Module includes float casts Creusot cannot translate. Integer-to-integer impls could be verified. |
-| `ProductOrd::total_max` | `traits/operations/mod.rs` (trusted module) | Returns one of its arguments, at least as large as both. | Generic comparisons; floats have no sound `DeepModel`. |
-| `AtomDomain::new_closed` | `domains/mod.rs` (trusted module) | On success, the closed bounds are `bounds`, and `lower <= upper`. | Generic comparisons in `Bounds::new`. |
+| `ProductOrd::total_max` | `traits/operations/mod.rs` | Returns one of its arguments, at least as large as both. | Calls `max_by`, whose comparator is a generic `FnOnce` without a specification. |
+| Float `ProductOrd` (`total_cmp`, `ple_refl`; `ple`, `non_null` opaque) | `traits/operations/mod.rs` | `total_cmp` returns the order `ple` on non-null values (`Less` iff strictly below, ...); `ple` only relates non-null values, and is reflexive on them. | `ple` is IEEE `<=` and `non_null` is "not NaN"; floats have no sound `DeepModel`. The integer, `IBig`, `RBig` and pair impls are verified. |
+| `ord_clone` | `transformations/clamp/proof.rs` | Cloning a `ProductOrd` value returns the same value. | As `number_clone`; `ProductOrd` is implemented by the primitive numbers, `IBig`, `RBig` and pairs of these. |
+| `int_ple`, `float_ple` | `transformations/clamp/proof.rs` | For `Integer` types, `ple` is `<=` on the integer values. For `Float` types, a value `ple`-between two finite values is finite, and lies between them as a real. | The integer impls define `ple` this way (`impl_ProductOrd_for_ord`); for floats, `ple` is IEEE `<=`. Not stated generically. Used only to connect `make_clamp`'s output to `make_sum`'s input. |
+| `Ordering::{is_lt, is_le, is_gt, is_ge}` | `verification/mod.rs` (`extern_spec!`) | Each compares with `Less` / `Greater`. | `std`'s definitions; creusot-std does not specify them. |
+| `AtomDomain::new_closed` | `domains/mod.rs` (trusted module) | On success, the closed bounds are `bounds`, `lower <= upper`, and the domain excludes NaN (`has_nan` false). | Generic comparisons in `Bounds::new`; sets `nan: false`. |
+| `AtomDomain::assert_non_nan`, `AtomDomain::has_nan` | `domains/mod.rs` (trusted module) | `has_nan` is opaque: whether the domain admits null values. `assert_non_nan` succeeds only if it does not. | Reads the private `nan` field. |
 | `VectorDomain::{new, with_size}` | `domains/mod.rs` | Field values. | Trivial. |
 | `Bounds::get_closed`, `Bounds::closed` | `domains/mod.rs` (trusted module) | On success, returns the bounds' closed model `closed()` (opaque); `AtomDomain::closed_bounds` is defined from it. | Matches on `Bound::Included`; `Bounds<T>` has no deep model. |
 | `Shuffle::shuffle` for `Vec<T>`, `vec_reorders` | `traits/samplers/mod.rs` (trusted module) | On success, the vector is a permutation of its previous contents (`reorders`). | `SliceRandom::shuffle` swaps elements. That the permutation is *uniform* is not stated here (see `shuffle_match`). |
@@ -39,22 +44,27 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `count_by_map` | `transformations/count/mod.rs` | Returns a map whose keys are exactly the values in the data (by deep model), each mapped to its number of occurrences saturated at `TV::MAX`. | `HashMap::{new, entry}` have no specifications in Creusot. Also assumes that `Eq` and `Hash` on the key type agree with equality of deep models, as they do for `Hashable` types (integers, `bool`, `char`, `String`). Each integer `saturating_add` is verified on its own, but not its use in the loop. |
 | `StabilityMap::new_from_constant` | `core/mod.rs` | On success, `c >= 0` and `d_out >= d_in * c`. | Compares the generic distance `c` with zero. |
 | `RealModel` for `f32`, `f64`, `FBig`, pairs | `verification/mod.rs` | Opaque. | Constrained only by trusted float contracts. Consistency is checked by mutation tests. |
+| Event-level metric definitions (`EventModel::close`) | `verification/rows.rs` | Definitions, not assumptions, but they must match OpenDP's: symmetric distance (multisets), insert-delete distance (common subsequence), change-one distance (same size, symmetric distance at most `2 d`), Hamming distance (same size, differing positions). | Transcribed from the Proof Definitions in `metrics/mod.rs`. |
 | `DeepModel` for `IBig`, `UBig`, `RBig` | `creusot-std` fork | Opaque (`Int` / `Real`). | Not yet constrained by contracts. |
 
 ## Skipped (trusted without contracts)
 
 - Modules outside the current scope: `accuracy`, `data`, `interactive`, `measurements`, `measures`,
-  `utilities`, `error`, `domains`, `traits::{cast, operations, samplers}`, every `combinators`
-  submodule except `chain`, and every `transformations` submodule except `sum`, `count` and
-  `cast_metric`.
+  `utilities`, `error`, `domains`, `traits::{cast, samplers}`, every `combinators` submodule except
+  `chain`, and every `transformations` submodule except `sum`, `count`, `cast_metric`, `clamp` and
+  `manipulation`.
 - In `transformations::count`: every constructor except `make_count_by`.
+- In `transformations::manipulation`: `make_row_by_row`, `make_identity`, `make_is_equal`,
+  `make_is_null`.
+- In `traits::operations`: the `FloatBits` methods, float `CheckNull::is_null`, `HashMap`'s
+  `CollectionSize::size`, `option_min`, `max_by`, `min_by`, `ProductOrd::total_min`.
 - In `combinators::chain`: `make_chain_mt`, `make_chain_pm`, `mismatch_error`, and the `>>` impls
   involving measurements or functions. In `transformations::cast_metric`: `make_metric_bounded`,
   `make_metric_unbounded`.
 - `PrivacyMap` methods, `PrivacyMap::new_from_constant`.
 - Integer `alerting_pow`, `neg_inf_div` (no specifications for `checked_pow`,
   `num::Integer::div_floor`).
-- `catch_unwind_silent`, float `ProductOrd::total_cmp`.
+- `catch_unwind_silent`.
 - Float sums: `round_up_to_nearest_power_of_two` (its contract is assumed by the Lean proof).
 - Traits with self-referential associated types, moved into trusted modules (declarations only):
   `MicrodataMetric`/`EventLevelMetric`, `BoundedMetric`/`UnboundedMetric`, `ODPRound`.

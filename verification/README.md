@@ -19,6 +19,7 @@ Requirements:
 export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 # the verified components
 tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
+  'transformations::clamp::*' 'transformations::manipulation::*' \
   'transformations::cast_metric::*' 'combinators::chain::*' \
   'verification::*' 'traits::*' 'domains::*' \
   'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*'
@@ -342,3 +343,56 @@ Code changes (behavior unchanged):
 - `TK` gains a `MaybeDeepModel` bound, which is empty outside Creusot.
 - The other constructors in the module (`make_count`, `make_count_distinct`,
   `make_count_by_categories`) are marked trusted, as they are out of scope.
+
+## Status: `make_clamp`
+
+Verified (`rust/src/transformations/clamp/proof.rs`), for every atom type `TA` and event-level
+metric `M` (`SymmetricDistance`, `InsertDeleteDistance`, `ChangeOneDistance`, `HammingDistance`):
+
+1. **The constructor meets its contract.** On success:
+   - The input domain excludes null values (`assert_non_nan`).
+   - The bounds are ordered, `lower <= upper`, in the order of `ProductOrd`.
+   - The output domain has the closed bounds `bounds`, excludes null values, and keeps the input's
+     size.
+   - The function can be evaluated on any dataset. Its outputs clamp each row
+     (`y = x.map(clamper(bounds))`), and every output row lies within the bounds.
+   - If `TA`'s order is total (all types except pairs), the function succeeds on every dataset of
+     non-null rows.
+   - The stability map returns at least `d_in`.
+2. **Stability.** On datasets within distance `d_in` under `M`, the outputs are within the
+   stability map at `d_in`. Applying any function to each row preserves each of the four
+   distances (`verification/rows.rs`), so this holds for any row function.
+3. **Composition with `make_sum`.** Clamped integers lie within the bounds as integers, and floats
+   clamped to finite bounds are finite and lie within the bounds as reals. These are the input
+   assumptions of the `make_sum` proofs (`clamp_int_bounded`, `clamp_float_bounded`).
+
+`make_row_by_row_fallible` is verified on its own contract (`row_by_row_contract`). Its function
+maps each row by the row function, and fails only if the row function fails on some row.
+`ProductOrd` gets a ghost model: an order `ple`, `non_null`, and whether the order is `total`.
+`total_cmp` (integer, `IBig`, `RBig` and pair impls), `total_gt` and `total_clamp` are verified
+against it. The float impl is trusted.
+
+Found: F3 (`FINDINGS.md`). Pairs are ordered componentwise, so clamping them can fail depending
+on the data. This is reachable from Rust only.
+
+Trusted: `ord_clone`, `int_ple`, `float_ple`, the float `ProductOrd` contract and the
+`Ordering::is_*` specifications (`TRUST.md`).
+
+Mutation checks: each of the following makes verification fail:
+- removing the construction-time check of the bounds;
+- swapping the bounds in the row function, or clamping only from below;
+- a stability map of `0` in `make_row_by_row_fallible`;
+- skipping the last row in `apply_rows`;
+- declaring pairs totally ordered (the pair `total_cmp` fails);
+- ordering pairs by "either component" instead of both;
+- returning `max` instead of `min` for values below `min` in `total_clamp`.
+
+Code changes:
+- `make_clamp` builds the output row domain with `AtomDomain::new_closed`. The value is the same,
+  since the input domain was checked to exclude NaN.
+- `make_clamp` checks the bounds with `ProductOrd::total_gt`, rejecting pair bounds that are not
+  ordered componentwise (F3). This changes behavior for pairs only.
+- `apply_rows` for vectors is an indexed loop rather than `iter().map(..).collect()`, with the
+  same results.
+- `traits::operations` is no longer a trusted module. Items in it outside the scope are trusted
+  individually.

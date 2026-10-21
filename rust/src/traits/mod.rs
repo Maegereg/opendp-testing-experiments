@@ -19,7 +19,6 @@ pub use cast::*;
 mod domains;
 pub use domains::*;
 
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod operations;
 pub use operations::*;
 

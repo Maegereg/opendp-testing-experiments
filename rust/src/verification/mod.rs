@@ -80,6 +80,44 @@ pub mod clamped;
 #[cfg(creusot)]
 pub mod cast_metric;
 
+/// Event-level dataset distances, and their stability under row-by-row maps.
+#[cfg(creusot)]
+pub mod rows;
+
+/// A supertrait of [`EventLevelMetric`](crate::metrics::EventLevelMetric) that is
+/// [`EventModel`](rows::EventModel) under Creusot, and empty otherwise.
+#[cfg(creusot)]
+#[doc(hidden)]
+pub trait MaybeEventModel: rows::EventModel {}
+#[cfg(creusot)]
+impl<T: rows::EventModel + ?Sized> MaybeEventModel for T {}
+
+#[cfg(not(creusot))]
+#[doc(hidden)]
+pub trait MaybeEventModel {}
+#[cfg(not(creusot))]
+impl<T: ?Sized> MaybeEventModel for T {}
+
+// Specifications of `Ordering`'s predicates, which creusot-std does not specify.
+#[cfg(creusot)]
+mod ordering_spec {
+    use core::cmp::Ordering;
+    use creusot_std::prelude::*;
+
+    extern_spec! {
+        impl Ordering {
+            #[ensures(result == (self == Ordering::Less))]
+            fn is_lt(self) -> bool;
+            #[ensures(result == (self != Ordering::Greater))]
+            fn is_le(self) -> bool;
+            #[ensures(result == (self == Ordering::Greater))]
+            fn is_gt(self) -> bool;
+            #[ensures(result == (self != Ordering::Less))]
+            fn is_ge(self) -> bool;
+        }
+    }
+}
+
 /// A supertrait of [`Float`](crate::traits::Float) that is
 /// [`FloatModel`](float::FloatModel) under Creusot, and empty otherwise.
 #[cfg(creusot)]

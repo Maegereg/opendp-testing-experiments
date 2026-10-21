@@ -132,6 +132,7 @@ impl<T: CheckAtom> AtomDomain<T> {
     pub fn nan(&self) -> bool {
         self.nan
     }
+    #[cfg_attr(creusot, ensures(result == Ok(()) ==> !self.has_nan()))]
     pub fn assert_non_nan(&self) -> Fallible<()> {
         if self.nan() {
             return fallible!(FailedFunction, "Domain contains nan");
@@ -162,11 +163,18 @@ impl<T: CheckAtom> AtomDomain<T> {
             }
         }
     }
+
+    /// Ghost model: the domain contains NaN (null values).
+    /// Otherwise, its members are non-null (e.g. [`ProductOrd::non_null`](crate::traits::ProductOrd)).
+    #[logic(opaque)]
+    pub fn has_nan(self) -> bool {
+        dead
+    }
 }
 
 impl<T: CheckAtom + PartialOrd + Debug> AtomDomain<T> {
     #[cfg_attr(creusot, ensures(forall<d: Self> result == Ok(d) ==>
-        d.closed_bounds() == Some(bounds) && bounds.0.real() <= bounds.1.real()))]
+        d.closed_bounds() == Some(bounds) && bounds.0.real() <= bounds.1.real() && !d.has_nan()))]
     pub fn new_closed(bounds: (T, T)) -> Fallible<Self>
     where
         T: RealModel,

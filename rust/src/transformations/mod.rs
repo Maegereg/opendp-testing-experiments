@@ -40,7 +40,6 @@ pub mod quantile_score_candidates;
 pub use quantile_score_candidates::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod manipulation;
 #[cfg(feature = "contrib")]
 pub use manipulation::*;
@@ -104,7 +103,6 @@ mod make_user_transformation;
 pub use make_user_transformation::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod clamp;
 #[cfg(feature = "contrib")]
 pub use clamp::*;

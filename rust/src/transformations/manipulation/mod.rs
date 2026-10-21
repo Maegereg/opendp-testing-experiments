@@ -7,7 +7,16 @@ use crate::core::{Domain, Function, Metric, MetricSpace, StabilityMap, Transform
 use crate::domains::{AtomDomain, VectorDomain};
 use crate::error::*;
 use crate::metrics::EventLevelMetric;
+#[cfg(creusot)]
+use crate::metrics::IntDistance;
 use crate::traits::{CheckAtom, CheckNull};
+#[cfg(creusot)]
+use creusot_std::{
+    logic::Seq,
+    macros::{ensures, invariant, logic, proof_assert, requires, snapshot, trusted},
+    prelude::inv,
+    std::ops::{FnExt, FnOnceExt},
+};
 
 /// A [`Domain`] representing a dataset.
 ///
@@ -20,14 +29,43 @@ pub trait DatasetDomain: Domain {
     /// for dataframes, this is the domain of the dataframe rows,
     /// and so on.
     type ElementDomain: Domain;
+
+    /// Ghost model: the rows of a dataset.
+    #[cfg(creusot)]
+    #[logic]
+    fn rows(value: Self::Carrier) -> Seq<<Self::ElementDomain as Domain>::Carrier>;
 }
 
 impl<D: Domain> DatasetDomain for VectorDomain<D> {
     type ElementDomain = D;
+
+    #[cfg(creusot)]
+    #[logic(open)]
+    fn rows(value: Vec<D::Carrier>) -> Seq<D::Carrier> {
+        pearlite! { value@ }
+    }
 }
 
 pub trait RowByRowDomain<DO: DatasetDomain>: DatasetDomain {
+    /// Ghost model of `translate`.
+    #[cfg(creusot)]
+    #[logic]
+    fn translated(self, output_row_domain: DO::ElementDomain) -> DO;
+
+    #[cfg_attr(creusot, ensures(result == self.translated(output_row_domain)))]
     fn translate(&self, output_row_domain: DO::ElementDomain) -> DO;
+
+    /// Applies `row_function` to each row. On success, the output rows are the images of the input
+    /// rows, and the result is an error only if `row_function` fails on some row.
+    #[cfg_attr(creusot, requires(forall<i> 0 <= i && i < Self::rows(*value).len() ==>
+        row_function.precondition((&Self::rows(*value)[i],))))]
+    #[cfg_attr(creusot, ensures(forall<out: DO::Carrier> result == Ok(out) ==>
+        DO::rows(out).len() == Self::rows(*value).len()
+        && forall<i> 0 <= i && i < Self::rows(*value).len() ==>
+            row_function.postcondition((&Self::rows(*value)[i],), Ok(DO::rows(out)[i]))))]
+    #[cfg_attr(creusot, ensures((forall<i, e: Error> 0 <= i && i < Self::rows(*value).len() ==>
+            !row_function.postcondition((&Self::rows(*value)[i],), Err(e)))
+        ==> exists<out: DO::Carrier> result == Ok(out)))]
     fn apply_rows(
         value: &Self::Carrier,
         row_function: &impl Fn(
@@ -37,6 +75,16 @@ pub trait RowByRowDomain<DO: DatasetDomain>: DatasetDomain {
 }
 
 impl<DIA: Domain, DOA: Domain> RowByRowDomain<VectorDomain<DOA>> for VectorDomain<DIA> {
+    #[cfg(creusot)]
+    #[logic(open)]
+    fn translated(self, output_row_domain: DOA) -> VectorDomain<DOA> {
+        VectorDomain {
+            element_domain: output_row_domain,
+            size: self.size,
+        }
+    }
+
+    #[cfg_attr(creusot, ensures(result == self.translated(output_row_domain)))]
     fn translate(
         &self,
         output_row_domain: <VectorDomain<DOA> as DatasetDomain>::ElementDomain,
@@ -47,15 +95,39 @@ impl<DIA: Domain, DOA: Domain> RowByRowDomain<VectorDomain<DOA>> for VectorDomai
         }
     }
 
+    #[cfg_attr(creusot, requires(forall<i> 0 <= i && i < value@.len() ==>
+        row_function.precondition((&value@[i],))))]
+    #[cfg_attr(creusot, ensures(forall<out: Vec<DOA::Carrier>> result == Ok(out) ==>
+        out@.len() == value@.len()
+        && forall<i> 0 <= i && i < value@.len() ==>
+            row_function.postcondition((&value@[i],), Ok(out@[i]))))]
+    #[cfg_attr(creusot, ensures((forall<i, e: Error> 0 <= i && i < value@.len() ==>
+            !row_function.postcondition((&value@[i],), Err(e)))
+        ==> exists<out: Vec<DOA::Carrier>> result == Ok(out)))]
     fn apply_rows(
         value: &Self::Carrier,
         row_function: &impl Fn(&DIA::Carrier) -> Fallible<DOA::Carrier>,
     ) -> Fallible<Vec<DOA::Carrier>> {
-        value.iter().map(row_function).collect()
+        let mut out = Vec::with_capacity(value.len());
+        #[cfg_attr(creusot, invariant(out@.len() == produced.len()
+            && forall<j> 0 <= j && j < out@.len() ==>
+                row_function.postcondition((&value@[j],), Ok(out@[j]))))]
+        for i in 0..value.len() {
+            match row_function(&value[i]) {
+                Ok(row) => out.push(row),
+                Err(e) => {
+                    #[cfg(creusot)]
+                    proof_assert!(row_function.postcondition((&value@[i@],), Err(e)));
+                    return Err(e);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
 /// Constructs a [`Transformation`] representing an arbitrary row-by-row transformation.
+#[cfg_attr(creusot, trusted)]
 pub(crate) fn make_row_by_row<DI, DO, M>(
     input_domain: DI,
     input_metric: M,
@@ -78,7 +150,51 @@ where
     make_row_by_row_fallible(input_domain, input_metric, output_row_domain, row_function)
 }
 
+/// The contract of [`make_row_by_row_fallible`] on success.
+///
+/// The output domain is the input domain with each row in `output_row_domain`. The function maps
+/// each row by `f`: it is defined wherever `f` is defined on every row, its output rows are the
+/// images of the input rows, and it fails only if `f` fails on some row. The stability map is at
+/// least the identity.
+#[cfg(creusot)]
+#[logic(open, prophetic)]
+pub fn row_by_row_contract<DI, DO, M, F>(
+    t: Transformation<DI, M, DO, M>,
+    input_domain: DI,
+    output_row_domain: DO::ElementDomain,
+    f: F,
+) -> bool
+where
+    DI: RowByRowDomain<DO>,
+    DO: DatasetDomain,
+    M: EventLevelMetric,
+    (DI, M): MetricSpace,
+    (DO, M): MetricSpace,
+    F: Fn(
+        &<DI::ElementDomain as Domain>::Carrier,
+    ) -> Fallible<<DO::ElementDomain as Domain>::Carrier>,
+{
+    pearlite! {
+        t.input_domain == input_domain
+        && t.output_domain == input_domain.translated(output_row_domain)
+        && (forall<x: DI::Carrier> inv(x) && (forall<i> 0 <= i && i < DI::rows(x).len() ==>
+                f.precondition((&DI::rows(x)[i],)))
+            ==> t.function.pre()[x])
+        && (forall<x: DI::Carrier, y: DO::Carrier> t.function.post()[x][Ok(y)] ==>
+            DO::rows(y).len() == DI::rows(x).len()
+            && forall<i> 0 <= i && i < DI::rows(x).len() ==>
+                f.postcondition((&DI::rows(x)[i],), Ok(DO::rows(y)[i])))
+        && (forall<x: DI::Carrier, r: Fallible<DO::Carrier>> t.function.post()[x][r] ==>
+            (forall<i, e: Error> 0 <= i && i < DI::rows(x).len() ==>
+                !f.postcondition((&DI::rows(x)[i],), Err(e)))
+            ==> exists<y: DO::Carrier> r == Ok(y))
+        && (forall<d: IntDistance, o: IntDistance> t.stability_map.post()[d][Ok(o)] ==> o@ >= d@)
+    }
+}
+
 /// Constructs a [`Transformation`] representing an arbitrary row-by-row transformation.
+#[cfg_attr(creusot, ensures(forall<t: Transformation<DI, M, DO, M>> result == Ok(t) ==>
+    row_by_row_contract(t, input_domain, output_row_domain, row_function)))]
 pub(crate) fn make_row_by_row_fallible<DI, DO, M>(
     input_domain: DI,
     input_metric: M,
@@ -133,6 +249,7 @@ where
 /// because the metric cannot be used to measure distances between any two elements of an atom domain.
 /// Whereas, the symmetric distance metric and vector domain,
 /// or absolute distance metric and atom domain on a scalar type, both form valid metric spaces.
+#[cfg_attr(creusot, trusted)]
 pub fn make_identity<D, M>(domain: D, metric: M) -> Fallible<Transformation<D, M, D, M>>
 where
     D: Domain,
@@ -172,6 +289,7 @@ where
 ///
 /// # Generics
 /// * `TIA` - Atomic Input Type. Type of elements in the input vector
+#[cfg_attr(creusot, trusted)]
 pub fn make_is_equal<TIA, M>(
     input_domain: VectorDomain<AtomDomain<TIA>>,
     input_metric: M,
@@ -201,6 +319,7 @@ where
 /// # Generics
 /// * `M` - Metric on input domain.
 /// * `DIA` - Atomic Input Domain. Either `OptionDomain<AtomDomain<TIA>>` or `AtomDomain<TIA>`
+#[cfg_attr(creusot, trusted)]
 pub fn make_is_null<M, DIA>(
     input_domain: VectorDomain<DIA>,
     input_metric: M,

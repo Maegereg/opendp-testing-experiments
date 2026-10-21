@@ -4,11 +4,18 @@ mod ffi;
 use opendp_derive::bootstrap;
 
 use crate::core::{MetricSpace, Transformation};
-use crate::domains::{AtomDomain, Bounds, VectorDomain};
+use crate::domains::{AtomDomain, VectorDomain};
 use crate::error::Fallible;
 use crate::metrics::EventLevelMetric;
 use crate::traits::{CheckAtom, ProductOrd};
 use crate::transformations::make_row_by_row_fallible;
+#[cfg(creusot)]
+use creusot_std::macros::{ensures, proof_assert, snapshot};
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[bootstrap(
     features("contrib"),
@@ -31,6 +38,8 @@ use crate::transformations::make_row_by_row_fallible;
 ///
 /// # Generics
 /// * `TA` - Atomic Type
+#[cfg_attr(creusot, ensures(forall<t: Clamp<TA, M>> result == Ok(t) ==>
+    clamp_contract(t, input_domain, bounds)))]
 pub fn make_clamp<TA: 'static + Clone + ProductOrd + PartialOrd + CheckAtom, M: EventLevelMetric>(
     input_domain: VectorDomain<AtomDomain<TA>>,
     input_metric: M,
@@ -41,15 +50,34 @@ where
 {
     input_domain.element_domain.assert_non_nan()?;
 
-    let mut output_row_domain = input_domain.element_domain.clone();
-    output_row_domain.bounds = Some(Bounds::<TA>::new_closed(bounds.clone())?);
+    #[cfg(creusot)]
+    let bnd = snapshot!(bounds);
+    let (lower, upper) = bounds;
+    let output_row_domain = AtomDomain::new_closed((lower.clone(), upper.clone()))?;
 
-    make_row_by_row_fallible(
+    // `new_closed` compares the bounds with `PartialOrd`.
+    // For pairs, `ProductOrd` is the componentwise order, which may not order the bounds.
+    if lower.total_gt(&upper)? {
+        return fallible!(
+            MakeTransformation,
+            "lower bound may not be greater than upper bound"
+        );
+    }
+
+    #[cfg(creusot)]
+    proof_assert!(ord_clone::<TA>());
+    let result = make_row_by_row_fallible(
         input_domain,
         input_metric,
         output_row_domain,
-        move |arg: &TA| arg.clone().total_clamp(bounds.0.clone(), bounds.1.clone()),
-    )
+        move |arg: &TA| arg.clone().total_clamp(lower.clone(), upper.clone()),
+    );
+    // The clamped rows are the image of the input rows under `clamper`.
+    #[cfg(creusot)]
+    proof_assert!(forall<t: Clamp<TA, M>> result == Ok(t) ==>
+        forall<x: Vec<TA>, y: Vec<TA>> t.function.post()[x][Ok(y)] ==>
+            y@ == x@.map(clamper(bnd.0, bnd.1)));
+    result
 }
 
 #[cfg(all(test, feature = "partials"))]
