@@ -33,6 +33,35 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   `n >= 2`, and `x / (1 - x)` is increasing, the bound holds.
 - **Suggestion:** Document the derivation; the formal proof of the float sum must use this slack.
 
+### D2. The sequential float overflow check relies on ties-to-even
+
+- **Where:** `rust/src/transformations/sum/float/checked/mod.rs`,
+  `CanFloatSumOverflow for Sequential<T>`, check 2.
+- **What:** The check accepts `n` values bounded by `max(|L|, U)` when
+  `M * n` is finite, with `M` the next power of two. The comment's justification ("the round up
+  will never be by more than the next magnitude of 2") bounds a single rounding, but a sequential
+  sum rounds `n` times, and past `2^p * M` (`p` = precision) every addition of `M` is a tie. Under
+  round-half-to-even each tie rounds *down*, so the sum stops growing at `2^p * M`, which is why
+  the check is sound (proved in Lean, `OpenDP.Float.Fmt.seq_step`). Under any other tie rule it
+  is not: with 2-bit precision and `emax = 2` (largest finite value 6), bounds `[0, 1]` and
+  `n = 6` pass the check, yet `1, 2, 3, 4, 5 → 6, 7 → 8` overflows.
+- **Impact:** None on platforms with IEEE 754 binary arithmetic in the default rounding mode
+  (Rust's semantics). Soundness depends on round-half-to-even, which is not documented.
+  Platforms without exact binary64/binary32 arithmetic (x87 double rounding on `i586` targets)
+  are not covered by the proof.
+- **Suggestion:** Document the dependence in the check's comment and proof.
+
+### D3. The float overflow checks rely on `inf_mul` failing on infinite results
+
+- **Where:** `InfMul` (`rust/src/traits/arithmetic/mod.rs`), used by `can_float_sum_overflow`
+  check 2: `round_up_to_nearest_power_of_two(mag)?.inf_mul(&size_).is_err()`.
+- **What:** The Proof Definition of `inf_mul` only promises `out >= self * v` on success, which
+  `Ok(inf)` satisfies; then check 2 would accept any size. The float implementation does return
+  `Err` on non-finite results, and the trait documentation says so, but the Proof Definition, the
+  part proofs rely on, does not. The same holds for the other `Inf*` operations.
+- **Suggestion:** Add "and `out` is finite" to the Proof Definitions of the float `Inf*`
+  operations (the Lean proof assumes it for `inf_mul`).
+
 ## Tool limitations (Creusot v0.14.0)
 
 | Limitation | Workaround |

@@ -35,6 +35,35 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 - Integer `alerting_pow`, `inf_div`, `neg_inf_div` (no specifications for `checked_pow`,
   `num::Integer::div_{ceil,floor}`).
 - `catch_unwind_silent`, float `ProductOrd::total_cmp`.
-- Float sums: `can_float_sum_overflow`, `round_up_to_nearest_power_of_two` (pending the float phase).
+- Float sums: `round_up_to_nearest_power_of_two`; `can_float_sum_overflow`, which is proved in
+  Lean instead (below).
 - Traits with self-referential associated types, moved into trusted modules (declarations only):
   `MicrodataMetric`/`EventLevelMetric`, `BoundedMetric`/`UnboundedMetric`, `ODPRound`.
+
+## Proved in Lean
+
+The Lean development (`verification/lean`) proves facts that Creusot cannot express or that need
+a model of floating-point rounding. Its theorems depend only on Lean's standard axioms
+(`propext`, `Classical.choice`, `Quot.sound`). What they assume is stated as hypotheses:
+
+| Theorem | Rust item | Assumed |
+| --- | --- | --- |
+| `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls) | See below. |
+
+Assumptions of the overflow-check theorems:
+
+- **Transcription.** `canOverflowSeq`, `canOverflowPw`, `seqSum` and `pwSum` transcribe the Rust
+  code by hand (Aeneas cannot extract float code). They are short and mirror it line by line.
+- **IEEE arithmetic.** `f32`/`f64` addition rounds to nearest, ties to even, and overflows to an
+  infinity when the rounded result exceeds `MAX` (IEEE 754 binary32/binary64, as Rust specifies).
+- **Primitive contracts** (`Prims.Spec`):
+  - `inf_cast(size) >= size`;
+  - `neg_inf_div` rounds down;
+  - `inf_mul` rounds up *and returns `Err` on non-finite results* (implemented, but not part of
+    its Proof Definition: see `FINDINGS.md` D3);
+  - `powf(2, k) <= 2^k` (`_2.powf(...)`; the platform `pow` is exact on powers of two);
+  - `round_up_to_nearest_power_of_two(x)` returns at least `2^c` for some `2^c >= x` with
+    `c >= -emax` (from its bit manipulation and `inf_powi` rounding up).
+- **Exact helpers.** `alerting_abs` and `total_max` are exact on floats (as in the Creusot
+  contracts), and the bounds are not NaN (`mag` is then a real number).
+- **Sizes.** `size < 2^64` (`usize`).

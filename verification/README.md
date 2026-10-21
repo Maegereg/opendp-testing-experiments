@@ -1,7 +1,8 @@
 # Formal verification of OpenDP (proof of concept)
 
 Machine-checked verification of selected OpenDP components with
-[Creusot](https://github.com/creusot-rs/creusot), a deductive verifier for Rust.
+[Creusot](https://github.com/creusot-rs/creusot), a deductive verifier for Rust, and
+[Lean 4](https://lean-lang.org) with Mathlib for floating-point arguments that need a model of rounding.
 
 - [`TRUST.md`](TRUST.md): everything the proofs assume rather than prove.
 - [`FINDINGS.md`](FINDINGS.md): bugs and other issues found along the way.
@@ -18,6 +19,14 @@ Requirements:
 export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 tools/creusot.sh                                      # compile and prove everything in scope
 tools/creusot.sh 'transformations::sum::int::checked::*'   # prove one module
+```
+
+Lean (`verification/lean`, Mathlib v4.35.0, toolchain pinned by `lean-toolchain`):
+
+```sh
+cd verification/lean
+lake exe cache get   # download prebuilt Mathlib
+lake build           # check all proofs
 ```
 
 Normal builds are unaffected: all annotations are behind `cfg(creusot)`, and `creusot-std` is
@@ -51,7 +60,7 @@ only a dependency under `cfg(creusot)`.
 | `make_(sized_)bounded_int_monotonic_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_int_ordered_sum` | Verified: contracts and stability theorems (sized and unsized), under the insert-delete distance. |
 | `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
-| `make_(sized_)bounded_float_checked_sum` | Not started |
+| `make_(sized_)bounded_float_checked_sum` | Overflow check (`can_float_sum_overflow`) proved sound in Lean; the rest not started. |
 | `make_(sized_)bounded_float_ordered_sum` | Not started |
 | `make_sum` (dispatch) | Not started |
 
@@ -120,3 +129,38 @@ justification is less obvious than the others (saturation is order-dependent).
 
 Mutation checks: `d_in / 3`, and a map of `d_in * upper` (ignoring `|lower|`), each make
 verification fail.
+
+### `can_float_sum_overflow` (Lean)
+
+Proved (`verification/lean/OpenDPVerification/Float/`): for `f32`, `f64` and every IEEE binary
+format with precision at least 2, if `can_float_sum_overflow(size, (lower, upper))` returns
+`Ok(false)`, then summing any dataset of at most `size` values within `[lower, upper]` does not
+overflow: `Sequential` and `Pairwise` respectively (`canOverflowSeq_sound`,
+`canOverflowPw_sound`). The transformations rely on this, as they sum without checking for
+infinities.
+
+- `Format.lean`: formats with unbounded exponent range, round-to-nearest-even (`rne`), and its
+  properties: it returns a nearest value of the format, is monotone and odd, and fixes values of
+  the format.
+- `Sum.lean`: the two summation algorithms and the overflow arguments. By monotonicity, a dataset
+  bounded by `M = 2^c` sums to at most the sum of all `M`s. Sequentially, that is
+  `min(k, 2^p) * M`, as each further addition of `M` is a tie that rounds down to even.
+  Pairwise, it is at most `RU(k) * M`, where `RU` rounds up to the format, because
+  `RU(a) + RU(b) <= RU(a + b)` for halves `|a - b| <= 1`. Check 1 is handled separately:
+  sequentially, an addition of less than half an ulp of `MAX` rounds back to `MAX`; pairwise,
+  `n * mag < ulp(MAX)` leaves a large margin.
+- `Overflow.lean`: a line-by-line model of the Rust code over abstract primitives that are only
+  assumed to meet their contracts (`TRUST.md`), and the soundness theorems.
+
+Before the proofs, an exhaustive search over tiny formats (`scripts/float_sum_overflow_search.py`)
+found no counterexample. It also showed that the sequential check is unsound under any tie rule
+other than ties-to-even (`FINDINGS.md` D2).
+
+Mutation checks: each of the following makes the proof fail. Each also makes the claim false, for
+some primitives that meet the weakened contracts:
+- check 1 compares against `ulp(MAX)` instead of `ulp(MAX) / 2`;
+- the pairwise limit is rounded up (`inf_div`) instead of down;
+- `inf_mul` may return `Ok(inf)`;
+- the size is rounded down when cast.
+
+No code changes.
