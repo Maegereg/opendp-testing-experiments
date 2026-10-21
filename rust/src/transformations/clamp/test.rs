@@ -24,3 +24,17 @@ fn test_make_clamp_rejects_unordered_pair_bounds() -> Fallible<()> {
     assert!((input_space >> then_clamp(((0.0, 10.0), (1.0, 0.0)))).is_err());
     Ok(())
 }
+
+#[test]
+fn test_make_clamp_pairs_componentwise() -> Fallible<()> {
+    // (-1, 20) is neither below nor above (0, 0) componentwise, so it used to fail.
+    let input_space = (
+        VectorDomain::new(AtomDomain::<(f64, f64)>::new(None, None)),
+        SymmetricDistance,
+    );
+    let t = (input_space >> then_clamp(((0.0, 0.0), (10.0, 10.0))))?;
+    let arg = vec![(1.0, 2.0), (-1.0, 20.0), (-5.0, -5.0), (20.0, 20.0)];
+    let expected = vec![(1.0, 2.0), (0.0, 10.0), (0.0, 0.0), (10.0, 10.0)];
+    assert_eq!(t.invoke(&arg)?, expected);
+    Ok(())
+}

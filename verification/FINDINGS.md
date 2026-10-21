@@ -109,9 +109,15 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   Reachable only from Rust: the FFI dispatches `make_clamp` on numeric types only.
 - **Fix:** Restrict `make_clamp` (and `ProductOrd`) to totally ordered types, or clamp pairs
   componentwise. Checking the bounds with `ProductOrd` at construction fixes the first example only.
-- **Status:** On this branch, `make_clamp` checks the bounds with `total_gt` at construction, so
-  the first example is rejected when the transformation is built
-  (`test_make_clamp_rejects_unordered_pair_bounds`). The second remains.
+- **Status:** Fixed on this branch.
+  - `make_clamp` checks the bounds with `total_gt` at construction, so the first example is
+    rejected when the transformation is built (`test_make_clamp_rejects_unordered_pair_bounds`).
+  - `total_clamp` on pairs clamps each component separately. Wherever the old clamp succeeded, it
+    gives the same result, and it also succeeds on rows that are not ordered with the bounds:
+    `(-1, 20)` becomes `(0, 10)` (`test_make_clamp_pairs_componentwise`).
+  - `make_clamp` is proved to succeed on every dataset of non-null rows, for every atom type.
+  - `total_cmp`, `total_max` and `total_min` on pairs still fail on pairs that are not ordered
+    componentwise, as documented on `ProductOrd`. No verified component relies on them for pairs.
 
 ## Fragile derivations
 
@@ -194,6 +200,7 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 | A lemma (unit-valued logic function) called in a `proof_assert!` in program code is erased, so its conclusion is not instantiated. | Return `bool` with `#[ensures(result && conclusion)]`, and assert the call. |
 | An impl method without a contract does not inherit its trait method's contract. | Restate the contract on the impl (trusted impls included). |
 | Laws (`#[logic(law)]`) cannot have generic parameters, and were not available as axioms in a trait's default method (`total_clamp`). | Bool-valued lemma methods (`ProductOrd::ple_refl`, `EventModel::close_map`) that every impl proves, called explicitly. |
+| A method of an impl that calls a generic function (or a default method) using the same impl is rejected as possible recursion. | Expand the shared code with a macro inside each impl (`clamp_by_cmp_body!`). |
 | The inferred precondition of a closure includes the type invariants of its arguments. | State function preconditions for values satisfying `inv(x)`. |
 | Contracts written in a `#[trusted]` module are assumed without warning (by design), which is easy to miss when adding contracts to existing code: the new `ProductOrd` contracts were at first assumed, and a mutation check exposed it. | Untrust modules whose contracts the proofs rely on, and trust their other items individually. |
 | `inline` predicates are expanded in program goals but not in lemma specifications, so a lemma about `contract(t)` does not match a hypothesis that `contract(t)` holds, unless the solver re-folds it (it often cannot after `?`). | Bind the `Result` and assert `forall<t> r == Ok(t) ==> stable(t)` directly; or use a non-`inline` alias of the contract. |

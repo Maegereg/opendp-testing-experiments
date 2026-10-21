@@ -356,8 +356,7 @@ metric `M` (`SymmetricDistance`, `InsertDeleteDistance`, `ChangeOneDistance`, `H
      size.
    - The function can be evaluated on any dataset. Its outputs clamp each row
      (`y = x.map(clamper(bounds))`), and every output row lies within the bounds.
-   - If `TA`'s order is total (all types except pairs), the function succeeds on every dataset of
-     non-null rows.
+   - The function succeeds on every dataset of non-null rows.
    - The stability map returns at least `d_in`.
 2. **Stability.** On datasets within distance `d_in` under `M`, the outputs are within the
    stability map at `d_in`. Applying any function to each row preserves each of the four
@@ -368,12 +367,16 @@ metric `M` (`SymmetricDistance`, `InsertDeleteDistance`, `ChangeOneDistance`, `H
 
 `make_row_by_row_fallible` is verified on its own contract (`row_by_row_contract`). Its function
 maps each row by the row function, and fails only if the row function fails on some row.
-`ProductOrd` gets a ghost model: an order `ple`, `non_null`, and whether the order is `total`.
-`total_cmp` (integer, `IBig`, `RBig` and pair impls), `total_gt` and `total_clamp` are verified
-against it. The float impl is trusted.
+`ProductOrd` gets a ghost model:
+- an order `ple`, `non_null`, and whether the order is `total`;
+- `clamped`, the result of `total_clamp`: compare with the bounds for totally ordered types, and
+  clamp each component for pairs.
 
-Found: F3 (`FINDINGS.md`). Pairs are ordered componentwise, so clamping them can fail depending
-on the data. This is reachable from Rust only.
+`total_cmp` (integer, `IBig`, `RBig` and pair impls), `total_gt` and every `total_clamp` are
+verified against it. The float `total_cmp` is trusted.
+
+Found and fixed: F3 (`FINDINGS.md`). Pairs are ordered componentwise, so clamping them used to
+fail depending on the data. This was reachable from Rust only.
 
 Trusted: `ord_clone`, `int_ple`, `float_ple`, the float `ProductOrd` contract and the
 `Ordering::is_*` specifications (`TRUST.md`).
@@ -385,13 +388,18 @@ Mutation checks: each of the following makes verification fail:
 - skipping the last row in `apply_rows`;
 - declaring pairs totally ordered (the pair `total_cmp` fails);
 - ordering pairs by "either component" instead of both;
-- returning `max` instead of `min` for values below `min` in `total_clamp`.
+- returning `max` instead of `min` for values below `min` in `total_clamp`;
+- swapping the bounds of one component in the pair `total_clamp`;
+- failing the pair `total_clamp` on rows that are not ordered with the bounds.
 
 Code changes:
 - `make_clamp` builds the output row domain with `AtomDomain::new_closed`. The value is the same,
   since the input domain was checked to exclude NaN.
 - `make_clamp` checks the bounds with `ProductOrd::total_gt`, rejecting pair bounds that are not
   ordered componentwise (F3). This changes behavior for pairs only.
+- `total_clamp` has no default body. Totally ordered types expand the previous algorithm
+  (`clamp_by_cmp_body!`); pairs clamp componentwise (F3). The FFI and polars impls call
+  `clamp_by_cmp` and are unchanged.
 - `apply_rows` for vectors is an indexed loop rather than `iter().map(..).collect()`, with the
   same results.
 - `traits::operations` is no longer a trusted module. Items in it outside the scope are trusted

@@ -88,6 +88,10 @@ impl ProductOrd for ExtrinsicObject {
             _ => fallible!(FailedFunction, "failed to compare extrinsic objects"),
         }
     }
+
+    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+        crate::traits::clamp_by_cmp(self, min, max)
+    }
 }
 
 unsafe impl Send for ExtrinsicObject {}

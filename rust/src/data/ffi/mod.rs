@@ -1139,6 +1139,10 @@ impl ProductOrd for AnyObject {
             u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, usize, f32, f64, (f32, f32), (f64, f64), ExtrinsicObject
         ])], (self, other))
     }
+
+    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+        crate::traits::clamp_by_cmp(self, min, max)
+    }
 }
 
 impl Clone for AnyObject {

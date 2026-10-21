@@ -214,4 +214,8 @@ impl ProductOrd for Bounds {
         }
         Ok(Ordering::Equal)
     }
+
+    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+        crate::traits::clamp_by_cmp(self, min, max)
+    }
 }

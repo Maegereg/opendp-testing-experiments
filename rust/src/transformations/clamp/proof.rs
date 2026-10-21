@@ -12,7 +12,7 @@ use crate::{
     domains::{AtomDomain, VectorDomain},
     error::Fallible,
     metrics::{EventLevelMetric, IntDistance},
-    traits::{CheckAtom, Float, Integer, ProductOrd, clamp_log},
+    traits::{CheckAtom, Float, Integer, ProductOrd},
     verification::{float::float_in_bounds, ordered::bounded},
 };
 
@@ -34,7 +34,7 @@ pub fn ord_clone<T: ProductOrd + Clone>() -> bool {
 /// Clamping to `[lower, upper]`, as a logical function on rows.
 #[logic(open)]
 pub fn clamper<TA: ProductOrd>(lower: TA, upper: TA) -> Mapping<TA, TA> {
-    pearlite! { |v| clamp_log(v, lower, upper) }
+    pearlite! { |v: TA| v.clamped(lower, upper) }
 }
 
 /// The contract of `make_clamp` on success.
@@ -58,8 +58,8 @@ pub fn clamp_contract<TA: Clone + ProductOrd + PartialOrd + CheckAtom, M: EventL
         && (forall<x: Vec<TA>, y: Vec<TA>> t.function.post()[x][Ok(y)] ==>
             y@ == x@.map(clamper(bounds.0, bounds.1))
             && forall<i> 0 <= i && i < y@.len() ==> bounds.0.ple(y@[i]) && y@[i].ple(bounds.1))
-        // and, if any two non-null values of `TA` are comparable, succeeds on non-null data
-        && (TA::total() ==> forall<x: Vec<TA>, r: Fallible<Vec<TA>>> t.function.post()[x][r]
+        // and succeeds on non-null data
+        && (forall<x: Vec<TA>, r: Fallible<Vec<TA>>> t.function.post()[x][r]
             && (forall<i> 0 <= i && i < x@.len() ==> x@[i].non_null())
             ==> exists<y: Vec<TA>> r == Ok(y))
         // the stability map returns at least d_in

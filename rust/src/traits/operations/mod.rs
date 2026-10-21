@@ -74,6 +74,10 @@ pub trait HasNull: CheckNull {
 /// The framework provides a way to ensure values are non-null at runtime.
 /// This trait should only be used when the framework can rely on these assurances.
 /// ProductOrd shares the same interface as Ord, but with a total_ prefix on methods
+///
+/// Pairs are ordered componentwise, which is not total: `total_cmp` returns an error on pairs that
+/// are not ordered componentwise. `total_clamp` clamps each component separately, so it succeeds
+/// on any non-null pair.
 pub trait ProductOrd: Sized + RealModel {
     /// Ghost model: the order compared by `total_cmp`.
     #[cfg(creusot)]
@@ -90,6 +94,11 @@ pub trait ProductOrd: Sized + RealModel {
     #[cfg(creusot)]
     #[logic]
     fn total() -> bool;
+
+    /// Ghost model of `total_clamp`.
+    #[cfg(creusot)]
+    #[logic]
+    fn clamped(self, min: Self, max: Self) -> Self;
 
     /// Lemma: only non-null values are ordered, and each of them is ordered with itself.
     #[cfg(creusot)]
@@ -137,24 +146,12 @@ pub trait ProductOrd: Sized + RealModel {
     /// For any three values `self`, `min` and `max` of type `Self`, returns `Ok(out)` or `Err(e)`.
     /// The implementation returns `Err(e)` if any of `self`, `min` or `max` are null.
     /// Otherwise returns `Some(out)` where `out` is `min` if $self \lt min$, `max` if $self \gt max$, or else `self`.
+    /// For pairs, each component is clamped separately.
     #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
-        out == clamp_log(self, min, max) && min.ple(out) && out.ple(max)))]
+        out == self.clamped(min, max) && min.ple(out) && out.ple(max)))]
     #[cfg_attr(creusot, ensures(
-        Self::total() && self.non_null() && min.ple(max) ==> exists<out: Self> result == Ok(out)))]
-    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
-        #[cfg(creusot)]
-        proof_assert!(min.ple(max) ==> Self::ple_refl(min, max));
-        if min.total_gt(&max)? {
-            return fallible!(FailedFunction, "min cannot be greater than max");
-        }
-        Ok(if let Ordering::Less = self.total_cmp(&min)? {
-            min
-        } else if let Ordering::Greater = self.total_cmp(&max)? {
-            max
-        } else {
-            self
-        })
-    }
+        self.non_null() && min.ple(max) ==> exists<out: Self> result == Ok(out)))]
+    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self>;
 
     /// # Proof Definition
     /// For any two values `self` and `other` of type `Self`, returns `Ok(out)` or `Err(e)`.
@@ -196,7 +193,7 @@ pub trait ProductOrd: Sized + RealModel {
     }
 }
 
-/// Ghost model of [`ProductOrd::total_clamp`]: `min` if `v` is below `min`, `max` if `v` is above `max`,
+/// Ghost model of [`clamp_by_cmp`]: `min` if `v` is below `min`, `max` if `v` is above `max`,
 /// and otherwise `v`.
 #[cfg(creusot)]
 #[logic(open)]
@@ -204,6 +201,38 @@ pub fn clamp_log<T: ProductOrd>(v: T, min: T, max: T) -> T {
     pearlite! {
         if v.ple(min) && !min.ple(v) { min } else if max.ple(v) && !v.ple(max) { max } else { v }
     }
+}
+
+/// The body of [`ProductOrd::total_clamp`] for totally ordered types `$T`: compares `$v` with the
+/// bounds. A macro, because Creusot rejects calls from an impl's methods to generic functions that
+/// use the impl (as possible recursion).
+macro_rules! clamp_by_cmp_body {
+    ($T:ty; $v:expr, $min:expr, $max:expr) => {{
+        let (v, min, max) = ($v, $min, $max);
+        #[cfg(creusot)]
+        proof_assert!(min.ple(max) ==> <$T>::ple_refl(min, max));
+        if let Ordering::Greater = ProductOrd::total_cmp(&min, &max)? {
+            return fallible!(FailedFunction, "min cannot be greater than max");
+        }
+        Ok(if let Ordering::Less = ProductOrd::total_cmp(&v, &min)? {
+            min
+        } else if let Ordering::Greater = ProductOrd::total_cmp(&v, &max)? {
+            max
+        } else {
+            v
+        })
+    }};
+}
+
+/// [`ProductOrd::total_clamp`] for totally ordered types: compares `v` with the bounds.
+#[cfg_attr(creusot, ensures(forall<out: T> result == Ok(out) ==>
+    out == clamp_log(v, min, max) && min.ple(out) && out.ple(max)))]
+#[cfg_attr(creusot, ensures(
+    T::total() && v.non_null() && min.ple(max) ==> exists<out: T> result == Ok(out)))]
+// Used by the `ProductOrd` impls of FFI and polars types.
+#[cfg_attr(not(any(feature = "ffi", feature = "polars")), allow(dead_code))]
+pub(crate) fn clamp_by_cmp<T: ProductOrd>(v: T, min: T, max: T) -> Fallible<T> {
+    clamp_by_cmp_body!(T; v, min, max)
 }
 
 /// Bitwise consts and decompositions for float types.
@@ -438,6 +467,23 @@ macro_rules! impl_ProductOrd_for_ord {
         #[cfg_attr(creusot, ensures(Self::total() && self.non_null() && other.non_null() ==>
             exists<o: Ordering> result == Ok(o)))]
         fn total_cmp(&self, other: &Self) -> Fallible<Ordering> {Ok(Ord::cmp(self, other))}
+
+        #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+            out == self.clamped(min, max) && min.ple(out) && out.ple(max)))]
+        #[cfg_attr(creusot, ensures(
+            self.non_null() && min.ple(max) ==> exists<out: Self> result == Ok(out)))]
+        fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+            clamp_by_cmp_body!(Self; self, min, max)
+        }
+        #[cfg(creusot)]
+        #[logic(open)]
+        fn clamped(self, min: Self, max: Self) -> Self {
+            pearlite! {
+                if self.ple(min) && !min.ple(self) { min }
+                else if max.ple(self) && !self.ple(max) { max }
+                else { self }
+            }
+        }
     })*}
 }
 impl_ProductOrd_for_ord!(
@@ -493,6 +539,23 @@ macro_rules! impl_total_ord_for_float {
             fn total_cmp(&self, other: &Self) -> Fallible<Ordering> {
                 PartialOrd::partial_cmp(self, other)
                     .ok_or_else(|| err!(FailedFunction, concat!(stringify!($ty), " cannot not be null when clamping.")))
+            }
+
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+                out == self.clamped(min, max) && min.ple(out) && out.ple(max)))]
+            #[cfg_attr(creusot, ensures(
+                self.non_null() && min.ple(max) ==> exists<out: Self> result == Ok(out)))]
+            fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+                clamp_by_cmp_body!(Self; self, min, max)
+            }
+            #[cfg(creusot)]
+            #[logic(open)]
+            fn clamped(self, min: Self, max: Self) -> Self {
+                pearlite! {
+                    if self.ple(min) && !min.ple(self) { min }
+                    else if max.ple(self) && !self.ple(max) { max }
+                    else { self }
+                }
             }
         })*
     }
@@ -564,6 +627,23 @@ impl<T1: ProductOrd + Debug, T2: ProductOrd + Debug> ProductOrd for (T1, T2) {
                 }
             },
         )
+    }
+
+    #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==>
+        out == self.clamped(min, max) && min.ple(out) && out.ple(max)))]
+    #[cfg_attr(creusot, ensures(
+        self.non_null() && min.ple(max) ==> exists<out: Self> result == Ok(out)))]
+    fn total_clamp(self, min: Self, max: Self) -> Fallible<Self> {
+        Ok((
+            self.0.total_clamp(min.0, max.0)?,
+            self.1.total_clamp(min.1, max.1)?,
+        ))
+    }
+
+    #[cfg(creusot)]
+    #[logic(open)]
+    fn clamped(self, min: Self, max: Self) -> Self {
+        pearlite! { (self.0.clamped(min.0, max.0), self.1.clamped(min.1, max.1)) }
     }
 }
 
