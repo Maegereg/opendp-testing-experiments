@@ -79,6 +79,11 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   proved stable under insertion and deletion (the integer ordered sums), and the same search found
   no counterexample for sequential summation. Alternatively, keep pairwise summation with a
   sensitivity that accounts for regrouping.
+- **Status:** Fixed on this branch in `make_sum`: its four ordered float branches use
+  `Sequential<T>` (verified stable). The checked branches keep `Pairwise<T>`, which is verified.
+  `transformations::sum::test::test_make_sum_float_saturating_is_stable` is the 32-element example
+  above; it fails before the fix. `Pairwise<T>` is still the default `S` of the ordered sum
+  constructors when called directly, and remains unstable there.
 
 ## Fragile derivations
 
