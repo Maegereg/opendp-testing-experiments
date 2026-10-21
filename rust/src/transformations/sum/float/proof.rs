@@ -51,7 +51,7 @@ pub fn div_antimono(x: Real, a: Real, b: Real) {
     }
 }
 
-/// The sequential bound: `(n - 1) * (n * mag) * u <= n^2 / 2^MANTISSA_BITS * mag <= e`.
+/// The sequential bound: `n * (n * mag) * u <= n^2 / 2^MANTISSA_BITS * mag <= e`.
 #[logic]
 #[requires(n >= 0)]
 #[requires(s2 >= Real::from_int(n) * Real::from_int(n))]
@@ -60,7 +60,7 @@ pub fn div_antimono(x: Real, a: Real, b: Real) {
 #[requires(e >= q * m)]
 // (`result` is `true`: calling the lemma in a `proof_assert!` triggers its conclusion.)
 #[ensures(result && Real::from_int(0) <= e
-    && Real::from_int(n - 1) * (Real::from_int(n) * m) * unit_roundoff::<T>() <= e)]
+    && Real::from_int(n) * (Real::from_int(n) * m) * unit_roundoff::<T>() <= e)]
 pub fn seq_error_chain<T: Float>(n: Int, s2: Real, q: Real, m: Real, e: Real) -> bool {
     pearlite! {
         roundoff_facts::<T>();
@@ -72,32 +72,27 @@ pub fn seq_error_chain<T: Float>(n: Int, s2: Real, q: Real, m: Real, e: Real) ->
         proof_assert!(nn * nn / p >= Real::from_int(0));
         proof_assert!(q >= Real::from_int(0));
         proof_assert!(q * m >= Real::from_int(0));
-        // (n - 1) * n * m * u <= n * n * m * u = n * n * m / (2p) <= n * n * m / p
+        // n * n * m * u = n * n * m / (2p) <= n * n * m / p
         proof_assert!(nn * m * u >= Real::from_int(0));
-        proof_assert!(Real::from_int(n - 1) * (nn * m * u) <= nn * (nn * m * u));
         proof_assert!(nn * (nn * m * u) == (nn * nn / p) * m / Real::from_int(2));
         proof_assert!((nn * nn / p) * m <= (s2 / p) * m);
         proof_assert!((s2 / p) * m <= q * m);
-        proof_assert!(Real::from_int(n - 1) * (nn * m) * u == Real::from_int(n - 1) * (nn * m * u));
+        proof_assert!(nn * (nn * m) * u == nn * (nn * m * u));
         true
     }
 }
 
 #[logic]
 #[requires(0 <= n && n <= m && Real::from_int(0) <= a && a <= b)]
-#[requires(Real::from_int(0) <= e && Real::from_int(m - 1) * b * unit_roundoff::<T>() <= e)]
-#[ensures(Real::from_int(0) <= e && Real::from_int(n - 1) * a * unit_roundoff::<T>() <= e)]
+#[requires(Real::from_int(0) <= e && Real::from_int(m) * b * unit_roundoff::<T>() <= e)]
+#[ensures(Real::from_int(0) <= e && Real::from_int(n) * a * unit_roundoff::<T>() <= e)]
 pub fn seq_error_mono<T: Float>(n: Int, m: Int, a: Real, b: Real, e: Real) {
     pearlite! {
         roundoff_facts::<T>();
         let u = unit_roundoff::<T>();
-        if n >= 1 {
-            proof_assert!(Real::from_int(n - 1) * a <= Real::from_int(m - 1) * a);
-            proof_assert!(Real::from_int(m - 1) * a <= Real::from_int(m - 1) * b);
-            proof_assert!(Real::from_int(n - 1) * a * u <= Real::from_int(m - 1) * b * u)
-        } else {
-            proof_assert!(Real::from_int(n - 1) * a * u <= Real::from_int(0))
-        }
+        proof_assert!(Real::from_int(n) * a <= Real::from_int(m) * a);
+        proof_assert!(Real::from_int(m) * a <= Real::from_int(m) * b);
+        proof_assert!(Real::from_int(n) * a * u <= Real::from_int(m) * b * u)
     }
 }
 

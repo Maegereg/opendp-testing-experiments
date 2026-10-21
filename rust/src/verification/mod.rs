@@ -68,6 +68,10 @@ pub mod ordered;
 #[cfg(creusot)]
 pub mod float;
 
+/// Clamped sums of reals, and their stability under the insert-delete distance.
+#[cfg(creusot)]
+pub mod clamped;
+
 /// A supertrait of [`Float`](crate::traits::Float) that is
 /// [`FloatModel`](float::FloatModel) under Creusot, and empty otherwise.
 #[cfg(creusot)]

@@ -18,6 +18,9 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `FloatModel` for `f32`, `f64`; `float_facts` | `verification/float.rs` | `finite` is opaque; `mantissa_bits` is 52 / 23 (as `MANTISSA_BITS`); for every `Float`, `mantissa_bits >= 23` and `rounds_close` is the bound above. | `f32` and `f64` are the only implementors of `Float`. |
 | `log2_ge`, `log2_le` | `verification/float.rs` | `log2` is increasing and `log2(2^j) = j`. | Mathematics. |
 | `UncheckedSum::unchecked_sum` (`Sequential`, `Pairwise`) | `transformations/sum/float/checked/mod.rs` | If the sum does not overflow (`sum_finite`), its rounding error is at most `error_bound(n, sum of |x_i|, e)`: `(n - 1) u sum |x_i|` (sequential), `gamma(ceil(log2 n)) sum |x_i|` (pairwise), with `u` the unit roundoff. | Cited: Rump (2012), Jeannerod & Rump (2013) for recursive summation, valid for any `n`; Higham (2002), §4.2 for pairwise summation. Float addition is IEEE 754 round-to-nearest (Rust's semantics). |
+| `SaturatingSum::saturating_sum` (`Sequential`, `Pairwise`) | `transformations/sum/float/ordered/mod.rs` | Returns `saturating_sum_logic(arg)`: opaque. | Defines the model; the facts about it are below. |
+| `seq_saturating_sum_error` | `transformations/sum/float/ordered/proof.rs` | The sequential saturating sum of finite values bounded by `m` is within `n^2 m u` of the clamped exact sum `csum(x, MAX)`. | Proved in Lean (below). |
+| `FloatModel::max_finite` for `f32`, `f64` | `verification/float.rs` | Opaque, positive (`float_facts`). | `MAX`; the same constant as the Lean `maxFinite` (by name). |
 | `CanFloatSumOverflow::can_float_sum_overflow` (`Sequential`, `Pairwise`) | `transformations/sum/float/checked/mod.rs` | `Ok(false)` implies that summing at most `size` finite values within `bounds` does not overflow (`sum_finite`, opaque). | Proved in Lean (below). `sum_finite` corresponds to `seqSum` / `pwSum` not overflowing; the correspondence is by name. |
 | Signed integer `alerting_abs` | `traits/arithmetic/mod.rs` | `out = |self|`. | Wraps `checked_abs`, which `creusot-std` does not specify. |
 | `InfCast`, `ExactIntCast` (all impls) | `traits/cast/mod.rs` (trusted module) | `inf_cast`: `out >= v`; `neg_inf_cast`: `out <= v`; `exact_int_cast`: `out = v`. | Module includes float casts Creusot cannot translate. Integer-to-integer impls could be verified. |
@@ -56,11 +59,13 @@ a model of floating-point rounding. Its theorems depend only on Lean's standard 
 | Theorem | Rust item | Assumed |
 | --- | --- | --- |
 | `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls), whose Creusot contract they justify | See below. |
+| `OpenDP.Float.Fmt.satSeqSum_err` | `Sequential::<T>::saturating_sum`, justifying `seq_saturating_sum_error` | IEEE arithmetic and the transcription, as below; `saturating_add` is IEEE addition clamped to `[-MAX, MAX]` (an infinity clamps to `±MAX`). |
 
-Assumptions of the overflow-check theorems:
+Assumptions of these theorems:
 
-- **Transcription.** `canOverflowSeq`, `canOverflowPw`, `seqSum` and `pwSum` transcribe the Rust
-  code by hand (Aeneas cannot extract float code). They are short and mirror it line by line.
+- **Transcription.** `canOverflowSeq`, `canOverflowPw`, `seqSum`, `pwSum` and `satSeqSum`
+  transcribe the Rust code by hand (Aeneas cannot extract float code). They are short and mirror
+  it line by line.
 - **IEEE arithmetic.** `f32`/`f64` addition rounds to nearest, ties to even, and overflows to an
   infinity when the rounded result exceeds `MAX` (IEEE 754 binary32/binary64, as Rust specifies).
 - **Primitive contracts** (`Prims.Spec`):

@@ -21,9 +21,8 @@ tools/creusot.sh 'transformations::sum::*' 'verification::*' 'traits::*'   # the
 tools/creusot.sh 'transformations::sum::int::checked::*'                   # one module
 ```
 
-The float ordered sums (not started yet) fail. A run without a filter also covers code outside
-the verified components that is not yet marked trusted, and reports failures there: `Debug` impls,
-`invoke`, and `PartialEq` for metrics.
+A run without a filter also covers code outside the verified components that is not yet marked
+trusted, and reports failures there: `Debug` impls, `invoke`, and `PartialEq` for metrics.
 
 Lean (`verification/lean`, Mathlib v4.35.0, toolchain pinned by `lean-toolchain`):
 
@@ -65,7 +64,7 @@ only a dependency under `cfg(creusot)`.
 | `make_(sized_)bounded_int_ordered_sum` | Verified: contracts and stability theorems (sized and unsized), under the insert-delete distance. |
 | `make_(sized_)bounded_int_split_sum` | Verified: contracts and stability theorems (sized and unsized). |
 | `make_(sized_)bounded_float_checked_sum` | Verified: contracts and stability theorems (sized; unsized for datasets of at most `size_limit` values). Error bound computation verified; summation error bounds cited; overflow check proved in Lean. |
-| `make_(sized_)bounded_float_ordered_sum` | Not started |
+| `make_(sized_)bounded_float_ordered_sum` | `Sequential`: verified, contracts and stability theorems (sized; unsized for datasets of at most `size_limit` values), with the rounding error bound proved in Lean. `Pairwise`: contracts verified; **not stable** (`FINDINGS.md` F2). |
 | `make_sum` (dispatch) | Not started |
 
 ### `make_sized_bounded_int_checked_sum`
@@ -184,6 +183,39 @@ Code changes (behavior unchanged):
 - The unsized function clones the data only when it must shuffle it.
 - `can_float_sum_overflow` destructures `bounds` in its body.
 - The `inf_log2` impls are generated with a contract.
+
+### `make_bounded_float_ordered_sum`, `make_sized_bounded_float_ordered_sum`
+
+These sum with saturating float addition, `clamp(a + b, MIN, MAX)`. The derivation in the code
+compares the result with the ideal sum, which fails once sums saturate. The proof instead
+compares it with the exact sum clamped at every step, `csum`:
+
+1. **Rounding error (Lean, `Saturating.lean`):** the sequential saturating float sum of `n`
+   values bounded by `m` is within `2^-p n^2 m` of `csum` (`satSeqSum_err`).
+   - Clamping is 1-Lipschitz, so each step adds at most its rounding error, `2^-p |s + x|`.
+   - The partial sums stay below `k M` after `k` steps, as in the overflow proof, with
+     `M <= 2 m` a power of two.
+   - The code's error bound, `n^2 2^-MANTISSA_BITS m`, is twice this.
+2. **Stability of `csum` (Creusot, `verification/clamped.rs`):** under the insert-delete distance,
+   `|csum(x) - csum(y)| <= d_in max(|L|, U)`, and `(d_in / 2) (U - L)` for equal sizes. This is
+   the real counterpart of the integer ordered sums' proof.
+3. **The constructors meet their contracts** (`rust/src/transformations/sum/float/ordered/proof.rs`)
+   for any `S`, and for `S = Sequential<T>` the two combine into stability:
+   `|f(x) - f(y)| <= e + d_in * sensitivity + e`. The unsized sum truncates longer datasets to
+   their first `size_limit` values. The theorem covers datasets of at most `size_limit` values. A
+   brute-force search over clamped integer sums found no counterexample with truncation either.
+
+The same searches found that **pairwise** saturating sums are not stable. Removing one element
+regroups the rest, and clamping depends on the grouping (`FINDINGS.md` F2). `make_sum` uses them
+for `f32` and `f64` whenever the checked sum could overflow.
+
+Mutation checks: each of the following makes verification fail:
+- `d_in / 3` in the sized map;
+- the unsized sensitivity `U - L` instead of `max(U - L, |L|, U)`;
+- no relaxation in the map.
+
+Code changes: none (contracts only). The sequential `error_bound` is now `n u a`, weaker than the
+cited `(n - 1) u a`, so that it also bounds the saturating sum.
 
 ### `can_float_sum_overflow` (Lean)
 

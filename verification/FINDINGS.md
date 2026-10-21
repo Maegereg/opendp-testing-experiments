@@ -19,6 +19,36 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   parameters and distances, so whether data can reach it was not determined.
 - **Fix:** Use `checked_div` (or check for `MIN / -1`) before `div_ceil` / `div_floor`.
 
+### F2. The pairwise ordered float sums underestimate their sensitivity
+
+- **Where:** `rust/src/transformations/sum/float/ordered/mod.rs`,
+  `make_(sized_)bounded_float_ordered_sum::<Pairwise<T>>`, reached from `make_sum` for `f32` and
+  `f64` whenever the checked sum could overflow (the default `S` is also `Pairwise`).
+- **What:** The sum uses saturating addition, `clamp(a + b, MIN, MAX)`, over the pairwise split.
+  The map's derivation compares with the ideal sum (`|BS*(v) - BS(v)| <= error`), but a saturated
+  sum can be arbitrarily far from the ideal sum. Clamping depends on how elements are grouped, and
+  inserting or deleting one element shifts every later split point, regrouping the elements after
+  it. For `f64` and `k = MAX / 4.001`:
+  - With bounds `[-k, k]`, deleting the last element of a 32-element dataset changes the output of
+    `make_sum(VectorDomain::new(AtomDomain::new_closed((-k, k))?), InsertDeleteDistance)` by
+    `3.6e308`. Its `map(&1)` is `1.8e308`.
+  - In the sized case, with 6 elements in `[-k', 2k']` and `k' = MAX / 3.001`, one deletion plus one
+    insertion (`d_in = 2`) changes the output by `4/3` of the map.
+- **How found:** While specifying the ordered sums, the derivation in the code comment did not
+  account for saturation. An exhaustive search over clamped integer sums (`[-C, C]` in place of
+  `[MIN, MAX]`) then found counterexamples for pairwise summation only. A test against OpenDP
+  confirmed them, and `scripts/pairwise_ordered_sum_counterexample.py` reproduces them.
+- **Impact:** The stability map, and so the privacy guarantee of any downstream mechanism,
+  underestimates the change in the output. The worst example found is off by a factor of 2; the
+  searches were small, so larger factors are not ruled out. It only happens when sums saturate,
+  so values must be large: up to `size_limit` of them must sum to `MAX`. That is exactly when
+  `make_sum` chooses this sum. Under `SymmetricDistance`, `make_sum` shuffles first, so the
+  violation holds for a fraction of the orderings rather than all of them.
+- **Fix:** Use sequential summation when saturating. The sequential saturating sum of integers is
+  proved stable under insertion and deletion (the integer ordered sums), and the same search found
+  no counterexample for sequential summation. Alternatively, keep pairwise summation with a
+  sensitivity that accounts for regrouping.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`

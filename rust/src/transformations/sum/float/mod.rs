@@ -86,15 +86,16 @@ fn float_one<T: Float>() -> T {
 impl<T: Float> SumRelaxation for Sequential<T> {
     type Item = T;
 
-    /// `(n - 1) u a`, where `u` is the unit roundoff:
-    /// S. M. Rump, "Error estimation of floating-point summation and dot product",
-    /// BIT Numerical Mathematics 52 (2012), and C.-P. Jeannerod and S. M. Rump,
+    /// `n u a`, where `u` is the unit roundoff. For the exact sum, the error is at most
+    /// `(n - 1) u a` for any `n`: S. M. Rump, "Error estimation of floating-point summation and
+    /// dot product", BIT Numerical Mathematics 52 (2012), and C.-P. Jeannerod and S. M. Rump,
     /// "Improved error bounds for inner products in floating-point arithmetic",
-    /// SIAM J. Matrix Anal. Appl. 34(2) (2013): the bound holds for any `n`.
+    /// SIAM J. Matrix Anal. Appl. 34(2) (2013). For the saturating sum, with `a = n m`, it is at
+    /// most `n u a` (proved in Lean: `OpenDP.Float.Fmt.satSeqSum_err`).
     #[cfg(creusot)]
     #[logic(open)]
     fn error_bound(n: Int, a: Real, e: Real) -> bool {
-        pearlite! { Real::from_int(0) <= e && Real::from_int(n - 1) * a * unit_roundoff::<T>() <= e }
+        pearlite! { Real::from_int(0) <= e && Real::from_int(n) * a * unit_roundoff::<T>() <= e }
     }
 
     #[cfg(creusot)]

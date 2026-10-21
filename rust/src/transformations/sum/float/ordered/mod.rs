@@ -9,6 +9,16 @@ use crate::{
 };
 
 use super::{Float, Pairwise, Sequential, SumRelaxation};
+#[cfg(creusot)]
+use creusot_std::{
+    logic::Seq,
+    macros::{ensures, logic, trusted},
+};
+
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+pub use proof::*;
 
 #[cfg(feature = "ffi")]
 mod ffi;
@@ -46,6 +56,8 @@ mod ffi;
 ///
 /// # Generics
 /// * `S` - Summation algorithm to use over some data type `T` (`T` is shorthand for `S::Item`)
+#[cfg_attr(creusot, ensures(forall<t: FloatOrderedSum<S::Item>> result == Ok(t) ==>
+    float_ordered_sum_contract::<S>(t, size_limit, bounds)))]
 pub fn make_bounded_float_ordered_sum<S>(
     size_limit: usize,
     bounds: (S::Item, S::Item),
@@ -120,6 +132,8 @@ where
 ///
 /// # Generics
 /// * `S` - Summation algorithm to use over some data type `T` (`T` is shorthand for `S::Item`)
+#[cfg_attr(creusot, ensures(forall<t: FloatOrderedSum<S::Item>> result == Ok(t) ==>
+    sized_float_ordered_sum_contract::<S>(t, size, bounds)))]
 pub fn make_sized_bounded_float_ordered_sum<S>(
     size: usize,
     bounds: (S::Item, S::Item),
@@ -159,16 +173,41 @@ where
 
 #[doc(hidden)]
 pub trait SaturatingSum: SumRelaxation {
+    /// The result of `saturating_sum`.
+    #[cfg(creusot)]
+    #[logic]
+    fn saturating_sum_logic(arg: Seq<Self::Item>) -> Self::Item;
+
+    #[cfg_attr(creusot, ensures(result == Self::saturating_sum_logic(arg@)))]
     fn saturating_sum(arg: &[Self::Item]) -> Self::Item;
 }
 
 impl<T: Float> SaturatingSum for Sequential<T> {
+    /// `OpenDP.Float.Fmt.satSeqSum` (`verification/lean`).
+    #[cfg(creusot)]
+    #[logic(opaque)]
+    fn saturating_sum_logic(arg: Seq<T>) -> T {
+        dead
+    }
+
+    // Trusted: the fold is modeled in Lean (`satSeqSum`), which bounds its rounding error.
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result == Self::saturating_sum_logic(arg@)))]
     fn saturating_sum(arg: &[T]) -> T {
         arg.iter().fold(T::zero(), |sum, v| sum.saturating_add(v))
     }
 }
 
 impl<T: Float> SaturatingSum for Pairwise<T> {
+    /// Unspecified: the pairwise saturating sum is not stable (`FINDINGS.md`, F2).
+    #[cfg(creusot)]
+    #[logic(opaque)]
+    fn saturating_sum_logic(arg: Seq<T>) -> T {
+        dead
+    }
+
+    #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result == Self::saturating_sum_logic(arg@)))]
     fn saturating_sum(arg: &[T]) -> T {
         match arg.len() {
             0 => T::zero(),

@@ -21,6 +21,10 @@ pub trait FloatModel: RealModel {
     /// The number of explicitly stored mantissa bits (`FloatBits::MANTISSA_BITS`).
     #[logic]
     fn mantissa_bits() -> Int;
+
+    /// The largest finite value (`MAX`).
+    #[logic]
+    fn max_finite() -> Real;
 }
 
 impl FloatModel for f64 {
@@ -31,6 +35,10 @@ impl FloatModel for f64 {
     #[logic(open)]
     fn mantissa_bits() -> Int {
         52
+    }
+    #[logic(opaque)]
+    fn max_finite() -> Real {
+        dead
     }
 }
 
@@ -43,6 +51,10 @@ impl FloatModel for f32 {
     fn mantissa_bits() -> Int {
         23
     }
+    #[logic(opaque)]
+    fn max_finite() -> Real {
+        dead
+    }
 }
 
 /// Facts about every `Float` type.
@@ -52,6 +64,7 @@ impl FloatModel for f32 {
 #[trusted]
 #[logic(opaque)]
 #[ensures(T::mantissa_bits() >= 23)]
+#[ensures(T::max_finite() > Real::from_int(0))]
 #[ensures(forall<v: Real, out: Real> T::rounds_close(v, out) ==>
     real_abs(out - v) <= real_abs(v) / Real::from_int(2) + Real::from_int(1) / Real::from_int(1024))]
 pub fn float_facts<T: Float>() {
