@@ -119,7 +119,6 @@ mod cast_metric;
 pub use cast_metric::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod resize;
 #[cfg(feature = "contrib")]
 pub use resize::*;

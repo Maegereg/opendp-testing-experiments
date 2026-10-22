@@ -21,7 +21,7 @@ export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
   'transformations::clamp::*' 'transformations::manipulation::*' \
   'transformations::scalar_to_vector::*' 'transformations::cast_metric::*' \
-  'combinators::chain::*' 'measurements::noise::*' \
+  'transformations::resize::*' 'combinators::chain::*' 'measurements::noise::*' \
   'verification::*' 'traits::*' 'domains::*' \
   'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*' \
   'core::impl_Measurement_DI_MI_MO_TO::new'
@@ -406,6 +406,71 @@ Code changes:
   same results.
 - `traits::operations` is no longer a trusted module. Items in it outside the scope are trusted
   individually.
+
+## Status: `make_resize`
+
+Verified (`rust/src/transformations/resize/proof.rs`) for every atom type `TA` and each of the
+four metric pairs, except where it is not stable (F4, `FINDINGS.md`).
+
+1. **The constructor meets its contract** (`resize_contract`). On success:
+   - `size > 0`.
+   - The output domain is the input's element domain with `size` rows.
+   - The function can be evaluated on any dataset. Its output on `x` is described by `resize_out`:
+     - if `x` has at most `size` rows, `x` padded with `constant`, shuffled when the output metric
+       is ordered;
+     - otherwise the first `size` rows of `x`, shuffled first when the input metric is unordered.
+   - The stability map returns at least `2 d_in`.
+2. **The possible outputs.** A shuffle is uniform (`Shuffle`'s Proof Definition), so the support of
+   the output on `x` is `resized`: as above, with any ordering in place of a shuffle
+   (`out_resized`).
+3. **Stability, as a matching.** For datasets `x`, `y` within `d` under the input metric, every
+   possible output of `x` is matched with a possible output of `y` within `2 d` under the output
+   metric (for every ordered pair, so in both directions):
+   - `SymmetricDistance` to `SymmetricDistance`: `resize_sym_sym_stable`;
+   - `SymmetricDistance` to `InsertDeleteDistance`: `resize_sym_id_stable`;
+   - `InsertDeleteDistance` to `SymmetricDistance`: `resize_id_sym_stable`;
+   - `InsertDeleteDistance` to `InsertDeleteDistance`: `resize_id_id_stable_except`, for every
+     pair except a padded `x` (at most `size` rows) and a truncated `y` (more rows).
+     **For that case `resize_id_id_unstable` proves the opposite**: with distinct `a`, `b`, `c`
+     and `size = 3`, `[a, b, c]` and `[a, b, c, a]` are within distance 1, the first may be resized
+     to `[c, b, a]`, and every output of the second, `[a, b, c]`, is at distance more than 3.
+
+   Where one side is deterministic, the matching is the coupling. Where both are shuffled, that the
+   matching extends to a coupling of the uniform shuffles is assumed (`TRUST.md`).
+
+The matchings are built from decompositions of the datasets into a common part and extra rows:
+- padding moves the shared constants into the common part (`match_pad_pad`);
+- truncating splits an ordering into its first `size` rows and the rest (`split`,
+  `match_trunc_trunc`, `match_trunc_pad`, `match_pad_trunc`);
+- under the insert-delete distance, prefixes of `x` and `y` keep a prefix of their common
+  subsequence (`sub_prefix`, `sub_drop`), so the first `size` rows of datasets within `d` are within
+  `2 d` (`id_prefix`, `match_id_pad_trunc`);
+- for an ordered output, `reorder` orders the rows of `y`'s output like the matching rows of
+  `x`'s output, so that they differ in at most `|a|` positions, and hence are within insert-delete
+  distance `2 |a|` (`hamming_id`).
+
+Found: F4 (`FINDINGS.md`), confirmed by `resize_id_id_unstable` and by the ignored test
+`test_insert_delete_boundary_stability`. Not fixed.
+
+Also strengthened: `Shuffle::reorders` is now uninterpreted, implying a permutation but not
+equivalent to one. Before, the identity counted as a shuffle, so removing `data.shuffle()` from
+`make_ordered_random` still verified; now it fails.
+
+Trusted: `atom_clone`, `perm_same`, the coupling of matchings where both sides shuffle, and the
+`Shuffle` specification (`TRUST.md`).
+
+Mutation checks: each of the following makes verification fail:
+- removing the shuffle of padded datasets, or of datasets before truncating;
+- shuffling padded datasets when the input metric (instead of the output metric) is ordered;
+- truncating to `size - 1` rows;
+- a stability map of `d_in` instead of `2 d_in`;
+- removing the shuffle from `make_ordered_random`.
+
+Code changes (behavior unchanged):
+- The function's closure calls `resize_vec`, and the padding is built by `pad`, an indexed loop,
+  instead of an iterator chain.
+- `IsMetricOrdered` requires `MaybeEventModel` (empty outside Creusot).
+- `transformations::resize` is no longer a trusted module.
 
 ## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 

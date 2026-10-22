@@ -29,7 +29,8 @@ pub fn m_valid<DI: Domain, MI: Metric, MO: Measure, TO>(_m: Measurement<DI, MI, 
 
 /// `t` is a valid transformation.
 #[logic(opaque)]
-pub fn t_valid<DI: Domain, MI: Metric, DO: Domain, MO: Metric>(_t: Transformation<DI, MI, DO, MO>,
+pub fn t_valid<DI: Domain, MI: Metric, DO: Domain, MO: Metric>(
+    _t: Transformation<DI, MI, DO, MO>,
 ) -> bool {
     dead
 }

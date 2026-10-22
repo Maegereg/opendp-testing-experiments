@@ -19,10 +19,7 @@ use crate::{
     traits::{ExactIntCast, Float, InfCast, InfSqrt},
 };
 #[cfg(creusot)]
-use creusot_std::{
-    logic::real::Real,
-    prelude::*,
-};
+use creusot_std::{logic::real::Real, prelude::*};
 
 #[proven(proof_path = "measurements/noise/nature/float/utilities/find_nearest_multiple_of_2k.tex")]
 /// Find index of the nearest multiple of $2^k$ from x.

@@ -104,7 +104,9 @@ pub trait Shuffle {
     #[cfg_attr(creusot, creusot_std::macros::ensures(result == Ok(()) ==> (*self).reorders(^self)))]
     fn shuffle(&mut self) -> Fallible<()>;
 
-    /// Ghost model: `out` holds the elements of `self`, in some order.
+    /// Ghost model: `out` is the result of shuffling `self`, that is (by the Proof Definition) a
+    /// uniformly random ordering of its elements. Only `shuffle` establishes it, so that a
+    /// contract requiring it fails if the code does not shuffle.
     #[cfg(creusot)]
     #[creusot_std::macros::logic]
     fn reorders(self, out: Self) -> bool;
@@ -118,16 +120,19 @@ impl<T> Shuffle for Vec<T> {
         rng.error
     }
 
-    // Visible only in this module (see `vec_reorders`), as `permutation_of` slows down unrelated proofs.
+    // Uninterpreted: not every permutation of `self` (e.g. `self` itself) is a shuffle of it.
     #[cfg(creusot)]
-    #[creusot_std::macros::logic(open(self))]
+    #[creusot_std::macros::logic(opaque)]
     fn reorders(self, out: Self) -> bool {
-        pearlite! { out@.permutation_of(self@) }
+        dead
     }
 }
 
-/// Shuffling a vector permutes its elements.
+/// The result of shuffling a vector is a permutation of it.
+///
+/// Trusted: `SliceRandom::shuffle` permutes the slice.
 #[cfg(creusot)]
-#[creusot_std::macros::logic]
-#[creusot_std::macros::ensures(a.reorders(b) == b@.permutation_of(a@))]
+#[creusot_std::macros::trusted]
+#[creusot_std::macros::logic(opaque)]
+#[creusot_std::macros::ensures(a.reorders(b) ==> b@.permutation_of(a@))]
 pub fn vec_reorders<T>(a: Vec<T>, b: Vec<T>) {}
