@@ -200,7 +200,6 @@ pub mod domains;
 pub mod interactive;
 #[cfg(feature = "ffi")]
 pub mod internal;
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod measurements;
 #[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub mod measures;

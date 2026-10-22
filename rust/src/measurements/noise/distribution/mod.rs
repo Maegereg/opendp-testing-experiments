@@ -61,6 +61,7 @@ impl<T: 'static + CheckAtom> NoiseDomain for VectorDomain<AtomDomain<T>> {
 /// * `DI` - Domain of the data to be released. Valid values are `VectorDomain<AtomDomain<T>>` or `AtomDomain<T>`.
 /// * `MI` - Input Metric to measure distances between members of the input domain.
 /// * `MO` - Output Measure. Either `MaxDivergence` or `ZeroConcentratedDivergence`.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_noise<DI: Domain, MI: Metric, MO: NoiseMeasure>(
     input_domain: DI,
     input_metric: MI,
@@ -85,6 +86,7 @@ pub trait NoiseMeasure: Measure + 'static {
 impl NoiseMeasure for MaxDivergence {
     type Distribution = DiscreteLaplace;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn new_distribution(self, scale: f64, k: Option<i32>) -> Self::Distribution {
         DiscreteLaplace { scale, k }
     }
@@ -93,6 +95,7 @@ impl NoiseMeasure for MaxDivergence {
 impl NoiseMeasure for ZeroConcentratedDivergence {
     type Distribution = DiscreteGaussian;
 
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn new_distribution(self, scale: f64, k: Option<i32>) -> Self::Distribution {
         DiscreteGaussian { scale, k }
     }

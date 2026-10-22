@@ -287,7 +287,7 @@ pub fn unordered_copy<T: crate::traits::Number>(
     x2: Vec<T>,
 ) -> bool {
     pearlite! {
-        number_clone::<T>();
+        proof_assert!(number_clone::<T>());
         proof_assert!(x2@.ext_eq(x@));
         true
     }
@@ -643,7 +643,7 @@ pub fn shuffled_copy<T: Float>(
 ) -> bool {
     pearlite! {
         let c = such_that(|c: Vec<T>| <Vec<T> as Clone>::clone.postcondition((&x,), c) && c.reorders(x2));
-        number_clone::<T>();
+        proof_assert!(number_clone::<T>());
         proof_assert!(c@.ext_eq(x@));
         vec_reorders(c, x2);
         true

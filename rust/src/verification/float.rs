@@ -25,6 +25,11 @@ pub trait FloatModel: RealModel {
     /// The largest finite value (`MAX`).
     #[logic]
     fn max_finite() -> Real;
+
+    /// `k` such that `2^k` is the smallest positive (subnormal) value:
+    /// `-EXPONENT_BIAS - MANTISSA_BITS + 1`.
+    #[logic]
+    fn min_k() -> Int;
 }
 
 impl FloatModel for f64 {
@@ -39,6 +44,10 @@ impl FloatModel for f64 {
     #[logic(opaque)]
     fn max_finite() -> Real {
         dead
+    }
+    #[logic(open)]
+    fn min_k() -> Int {
+        -1074
     }
 }
 
@@ -55,6 +64,25 @@ impl FloatModel for f32 {
     fn max_finite() -> Real {
         dead
     }
+    #[logic(open)]
+    fn min_k() -> Int {
+        -149
+    }
+}
+
+/// Finite floats lie on the grid of multiples of `2^min_k`, within `[-MAX, MAX]`.
+///
+/// Trusted: IEEE 754 binary formats; every finite value is `m 2^(e - p + 1)` with `e >= emin`,
+/// so a multiple of the smallest subnormal `2^min_k`.
+#[trusted]
+#[logic(opaque)]
+#[ensures(result)]
+#[ensures(-1074 <= T::min_k() && T::min_k() <= -149)]
+#[ensures(forall<x: T> x.finite() ==>
+    (exists<m: Int> x.real() == Real::from_int(m) * super::dashu::pow2r(T::min_k()))
+    && -T::max_finite() <= x.real() && x.real() <= T::max_finite())]
+pub fn float_grid<T: FloatModel>() -> bool {
+    dead
 }
 
 /// Facts about every `Float` type.

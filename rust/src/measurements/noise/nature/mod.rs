@@ -19,6 +19,7 @@ pub trait Nature {
 
 impl Nature for IBig {
     type RV<const P: usize> = ZExpFamily<P>;
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn new_distribution<const P: usize>(scale: f64, k: Option<i32>) -> Fallible<Self::RV<P>> {
         if k.unwrap_or(0) != 0 {
             return fallible!(MakeMeasurement, "k is only valid for domains over floats");
@@ -32,6 +33,7 @@ impl Nature for IBig {
 macro_rules! impl_Nature_float {
     ($($T:ty)+) => ($(impl Nature for $T {
         type RV<const P: usize> = float::FloatExpFamily<P>;
+        #[cfg_attr(creusot, creusot_std::macros::trusted)]
         fn new_distribution<const P: usize>(scale: f64, k: Option<i32>) -> Fallible<Self::RV<P>> {
             Ok(float::FloatExpFamily::<P> {
                 scale,
@@ -43,6 +45,7 @@ macro_rules! impl_Nature_float {
 macro_rules! impl_Nature_int {
     ($($T:ty)+) => ($(impl Nature for $T {
         type RV<const P: usize> = integer::IntExpFamily<P>;
+        #[cfg_attr(creusot, creusot_std::macros::trusted)]
         fn new_distribution<const P: usize>(scale: f64, k: Option<i32>) -> Fallible<Self::RV<P>> {
             if k.unwrap_or(0) != 0 {
                 return fallible!(MakeMeasurement, "k is only valid for domains over floats");

@@ -84,10 +84,22 @@ mod poly;
 ///
 /// # opendp::error::Fallible::Ok(())
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 pub struct AtomDomain<T: CheckAtom> {
     pub bounds: Option<Bounds<T>>,
     nan: bool,
+}
+// Hand-written so that, under Creusot, it carries a contract (`domains` is trusted).
+impl<T: CheckAtom> Clone for AtomDomain<T> {
+    #[cfg_attr(creusot, ensures(
+        creusot_std::model::DeepModel::deep_model(result)
+            == creusot_std::model::DeepModel::deep_model(*self)))]
+    fn clone(&self) -> Self {
+        AtomDomain {
+            bounds: self.bounds.clone(),
+            nan: self.nan,
+        }
+    }
 }
 // Hand-written because the derive cannot expose the private `nan` field,
 // and because the carrier `T` (e.g. `dashu::IBig`) need not have a `DeepModel`.
@@ -129,6 +141,7 @@ impl<T: CheckAtom> AtomDomain<T> {
             nan: nan.is_some(),
         }
     }
+    #[cfg_attr(creusot, ensures(result == self.has_nan()))]
     pub fn nan(&self) -> bool {
         self.nan
     }
@@ -500,11 +513,23 @@ where
 /// assert!(!sized_domain.member(&vec![1, 2])?);
 /// # opendp::error::Fallible::Ok(())
 /// ```
-#[derive(Clone, crate::verification::PartialEq)]
+#[derive(crate::verification::PartialEq)]
 #[cfg_attr(creusot, derive(creusot_std::model::DeepModel))]
 pub struct VectorDomain<D: Domain> {
     pub element_domain: D,
     pub size: Option<usize>,
+}
+// Hand-written so that, under Creusot, it carries a contract (`domains` is trusted).
+impl<D: Domain> Clone for VectorDomain<D> {
+    #[cfg_attr(creusot, ensures(result.size == self.size
+        && creusot_std::model::DeepModel::deep_model(result.element_domain)
+            == creusot_std::model::DeepModel::deep_model(self.element_domain)))]
+    fn clone(&self) -> Self {
+        VectorDomain {
+            element_domain: self.element_domain.clone(),
+            size: self.size,
+        }
+    }
 }
 impl<D: Domain> Debug for VectorDomain<D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {

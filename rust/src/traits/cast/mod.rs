@@ -648,6 +648,7 @@ impl<R: Round> InfCast<FBig<R>> for f64 {
 macro_rules! impl_InfCast_dashu {
     ($($TI:ty),+; $TO:ty, $to:ident) => {
         $(impl InfCast<$TI> for $TO {
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() >= v.real()))]
             fn inf_cast(v: $TI) -> Fallible<Self> {
                 use Approximation::*;
                 Ok(match v.$to() {
@@ -656,6 +657,7 @@ macro_rules! impl_InfCast_dashu {
                 })
             }
 
+            #[cfg_attr(creusot, ensures(forall<out: Self> result == Ok(out) ==> out.real() <= v.real()))]
             fn neg_inf_cast(v: $TI) -> Fallible<Self> {
                 use Approximation::*;
                 Ok(match v.$to() {

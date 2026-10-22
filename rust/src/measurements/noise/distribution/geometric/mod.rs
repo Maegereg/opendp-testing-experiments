@@ -47,6 +47,7 @@ mod test;
 /// * `DI` - Domain of the data type to be released. Valid values are `VectorDomain<AtomDomain<T>>` or `AtomDomain<T>`
 /// * `MI` - Metric used to measure distance between members of the input domain.
 /// * `MO` - Measure used to quantify privacy loss. Valid values are just `MaxDivergence`
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_geometric<DI: NoiseDomain, MI: Metric, MO: Measure>(
     input_domain: DI,
     input_metric: MI,
@@ -85,6 +86,14 @@ where
     ConstantTimeGeometric<T>: MakeNoise<VectorDomain<AtomDomain<T>>, L1Distance<QI>, MO>,
     ZExpFamily<1>: NoisePrivacyMap<L1Distance<RBig>, MO>,
 {
+    // Outside the verified scope: no claim.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open)]
+    fn noise_claim(_m: Measurement<AtomDomain<T>, AbsoluteDistance<QI>, MO, T>) -> bool {
+        true
+    }
+
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn make_noise(
         self,
         input_space: (AtomDomain<T>, AbsoluteDistance<QI>),
@@ -109,6 +118,16 @@ where
     RBig: TryFrom<QI>,
     ZExpFamily<1>: NoisePrivacyMap<L1Distance<RBig>, MO>,
 {
+    // Outside the verified scope: no claim.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open)]
+    fn noise_claim(
+        _m: Measurement<VectorDomain<AtomDomain<T>>, L1Distance<QI>, MO, Vec<T>>,
+    ) -> bool {
+        true
+    }
+
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn make_noise(
         self,
         (input_domain, input_metric): (VectorDomain<AtomDomain<T>>, L1Distance<QI>),

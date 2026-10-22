@@ -131,7 +131,7 @@ pub fn shuffle_match<T: RealModel>(x: Seq<T>, y: Seq<T>, d: Int, px: Seq<T>) -> 
 /// generic `T`.
 #[trusted]
 #[logic(opaque)]
-#[ensures(forall<a: T, b: T> T::clone.postcondition((&a,), b) ==> a == b)]
-pub fn number_clone<T: Number>() {
+#[ensures(result && forall<a: T, b: T> T::clone.postcondition((&a,), b) ==> a == b)]
+pub fn number_clone<T: Number>() -> bool {
     dead
 }

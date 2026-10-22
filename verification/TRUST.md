@@ -9,7 +9,7 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | Item | Location | Assumed | Justification |
 | --- | --- | --- | --- |
 | `Function::{new, new_fallible, eval, clone}` | `core/mod.rs` | The ghost model (`pre`, `post`) records / replays the contract of the wrapped closure. | The bodies only wrap and call the closure; Creusot cannot see through `dyn Fn`. |
-| `StabilityMap::{new, new_fallible, eval, clone}` | `core/mod.rs` | As above (`post`); the closure must be total on values satisfying their type invariant. | As above. |
+| `StabilityMap::{new, new_fallible, eval, clone}`, `PrivacyMap::{new, new_fallible, eval, clone}` | `core/mod.rs` | As above (`post`); the closure must be total on values satisfying their type invariant. | As above. |
 | Float `Inf{Add,Sub,Mul,Div}`, `AlertingAbs`, `Alerting*`, `Saturating*` (`saturating_add_logic` opaque), `Inf{Ln,Log2,Exp,...}`, `InfPowI` | `traits/arithmetic/mod.rs` | The trait contracts (e.g. `inf_add`: `out >= self + v`; `inf_log2`: `out >= log2(self)`). | Implemented with `dashu` arbitrary-precision floats; not verifiable in Creusot. Candidate for testing / Kani. |
 | Accuracy of float `Inf{Add,Sub,Mul,Div}` and `inf_log2` (`RealModel::rounds_close`) | `traits/arithmetic/mod.rs`, `verification/mod.rs` | The result is within `|v| / 2 + 2^-10` of the exact value `v`. Not part of the Proof Definitions (`FINDINGS.md` D4). | Correct directed rounding moves a value by at most one unit in the last place. `true` (no assumption) for other types. |
 | Integer `inf_div` | `traits/arithmetic/mod.rs` | `out >= self / other` (as reals). | `num::Integer::div_ceil` has no specification. Panics on `MIN / -1` (`FINDINGS.md` F1). |
@@ -45,14 +45,41 @@ skipped: nothing about it is assumed, so verified code cannot rely on its behavi
 | `StabilityMap::new_from_constant` | `core/mod.rs` | On success, `c >= 0` and `d_out >= d_in * c`. | Compares the generic distance `c` with zero. |
 | `RealModel` for `f32`, `f64`, `FBig`, pairs | `verification/mod.rs` | Opaque. | Constrained only by trusted float contracts. Consistency is checked by mutation tests. |
 | Event-level metric definitions (`EventModel::close`) | `verification/rows.rs` | Definitions, not assumptions, but they must match OpenDP's: symmetric distance (multisets), insert-delete distance (common subsequence), change-one distance (same size, symmetric distance at most `2 d`), Hamming distance (same size, differing positions). | Transcribed from the Proof Definitions in `metrics/mod.rs`. |
-| `DeepModel` for `IBig`, `UBig`, `RBig` | `creusot-std` fork | Opaque (`Int` / `Real`). | Not yet constrained by contracts. |
+| `DeepModel` for `IBig`, `UBig`, `RBig`; `Sign` | `creusot-std` fork | Opaque (`Int` / `Real`); `Sign` is its own model. | Constrained by the `dashu` specifications below. |
+
+### `make_laplace` (phase 1)
+
+Privacy is a property of output distributions, which the logic does not model, so a measurement's
+validity is the uninterpreted predicate `m_valid` (and `t_valid` for transformations,
+`verification/privacy.rs`). Everything that gives these predicates meaning is assumed:
+
+| Item | Location | Assumed | Justification |
+| --- | --- | --- | --- |
+| `laplace_mechanism` | `measurements/noise/distribution/laplace/proof.rs` | A privacy map bounding the loss by `0` at `d_in = 0`, by at least `d_in / scale` when `scale > 0`, and by infinity when `scale = 0`, meets `NoisePrivacyMap`'s Proof Definition for `ZExpFamily<1>`. | Cited (Kind C): the discrete Laplace mechanism on integer vectors under L1 (Ghosh, Roughgarden and Sundararajan 2012; Canonne, Kamath and Steinke 2020), as in OpenDP's `NoisePrivacyMap_for_ZExpFamily1`. |
+| `noise_function` | `measurements/noise/mod.rs` | The noise function adds independent samples of the distribution to each element (`adds_noise`). | **The samplers are not verified** (claim B, deferred). The closure applies `Sample::sample`, whose Proof Definition promises `shift + Z`; for `ZExpFamily<1>` this is `sample_discrete_laplace` (CKS20). |
+| `noise_measurement_valid` | `verification/privacy.rs` | A measurement whose function adds noise from `rv` and whose map meets `NoisePrivacyMap`'s Proof Definition for `rv` is valid. | The definition of a valid measurement, given the two Proof Definitions. |
+| `make_chain_mt`, `make_chain_pm` | `combinators/chain/mod.rs` | A valid transformation chained into a valid measurement is valid; post-processing a valid measurement is valid. | Cited (Kind C): OpenDP's chaining proofs and post-processing immunity. The code composes `dyn Fn` closures, which Creusot cannot see through. |
+| `singleton_valid`, `float_to_bigint_valid`, `int_to_bigint_valid` | `verification/privacy.rs`, `measurements/noise/nature/{float,integer}/proof.rs` | Each transformation is valid given concrete stability statements: `[x]` has `L_p` distance `|x - y|`; the L1 distance between float vectors is read as `l1_close_float` (equal lengths, differing elements finite) and between integer vectors as `l1_int`; exact conversions preserve distances. | Definitions of `AbsoluteDistance` and `LpDistance` (review point). The stability statements themselves are proved. |
+| `NoisePrivacyMap` for `ZExpFamily<2>` | `measurements/noise/distribution/gaussian/mod.rs` | Meets its Proof Definition. | Out of scope (Gaussian); its contract is the trait's. No Laplace claim depends on it. |
+| `dashu` operations (`verification/dashu.rs`, `extern_spec!`) | `verification/dashu.rs` | Exact arithmetic on `IBig`/`UBig`/`RBig` (`+`, `-`, `*`, `/`, shifts, `into_parts`, `from_parts`, `sign`, `is_zero`, `clone`, conversions from `usize`, `IBig`, finite `f32`/`f64`); `/` truncates and `>>` rounds down; `dashu_facts`: a `UBig` is non-negative. | `dashu`'s documentation; the rounding of `>>` on negative values was checked by running it. |
+| `float_grid`, `fclamp_facts`, `float_conversion_facts`, `number_conversion_facts`, `ibig_from_facts` | `verification/float.rs`, `measurements/noise/nature/{float,integer}/proof.rs` | Finite floats are integer multiples of `2^min_k` within `[-MAX, MAX]` (`min_k` is -1074 / -149); clamping to `[MIN, MAX]` is the identity on finite values and finite on non-NaN ones; `RBig::try_from` and `IBig::from` are exact on numbers. | IEEE 754 and `num`/`dashu` behavior, which generic code cannot see. |
+| `get_min_k` | `measurements/noise/nature/float/utilities/mod.rs` | Returns `min_k` (`-EXPONENT_BIAS - MANTISSA_BITS + 1`). | Constant arithmetic on associated constants. |
+| `zero_loss` | `measurements/noise/distribution/laplace/mod.rs` | `0.0` is finite with value 0. | Creusot does not translate float literals in specifications. |
+| `InfCast` for `f32`, `f64` from `dashu` types | `traits/cast/mod.rs` | The trait contract, restated on the impls. | As the `InfCast` row above. |
+| `AtomDomain::clone`, `VectorDomain::clone`, `AtomDomain::nan` | `domains/mod.rs` (trusted module) | Clones have equal (deep) models; `nan()` returns `has_nan`. | Hand-written field-by-field clones. |
+| `Result::map_err` | `verification/mod.rs` (`extern_spec!`) | Maps `Err` through the closure, keeps `Ok`. | `std`'s definition; creusot-std does not specify it. |
 
 ## Skipped (trusted without contracts)
 
-- Modules outside the current scope: `accuracy`, `data`, `interactive`, `measurements`, `measures`,
-  `utilities`, `error`, `domains`, `traits::{cast, samplers}`, every `combinators` submodule except
-  `chain`, and every `transformations` submodule except `sum`, `count`, `cast_metric`, `clamp` and
-  `manipulation`.
+- Modules outside the current scope: `accuracy`, `data`, `interactive`, `measures`, `utilities`,
+  `error`, `domains`, `traits::{cast, samplers}`, every `measurements` submodule except `noise`,
+  every `combinators` submodule except `chain`, and every `transformations` submodule except
+  `sum`, `count`, `cast_metric`, `clamp`, `manipulation` and `scalar_to_vector`.
+- In `measurements::noise`: the Gaussian and geometric `make_noise` methods (whose `noise_claim`
+  is `true`: no claim), `make_gaussian`, `make_geometric`, `make_noise`,
+  `NoiseMeasure::new_distribution`, `Nature::new_distribution`, the `Sample` impls (the samplers),
+  and the post-processing functions `then_deintegerize_vec`, `then_saturating_cast` and
+  `then_index_or_default`.
 - In `transformations::count`: every constructor except `make_count_by`.
 - In `transformations::manipulation`: `make_row_by_row`, `make_identity`, `make_is_equal`,
   `make_is_null`.

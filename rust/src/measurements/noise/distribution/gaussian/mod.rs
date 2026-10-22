@@ -40,6 +40,7 @@ pub(crate) mod ffi;
 /// * `DI` - Domain of the data to be released. Valid values are `VectorDomain<AtomDomain<T>>` or `AtomDomain<T>`.
 /// * `MI` - Input Metric to measure distances between members of the input domain.
 /// * `MO` - Output Measure. The only valid measure is `ZeroConcentratedDivergence`.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_gaussian<DI: Domain, MI: Metric, MO: Measure>(
     input_domain: DI,
     input_metric: MI,
@@ -68,6 +69,14 @@ where
     DI::Atom: Nature,
     <DI::Atom as Nature>::RV<2>: MakeNoise<DI, MI, MO>,
 {
+    // Outside the verified scope: no claim.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open)]
+    fn noise_claim(_m: Measurement<DI, MI, MO, DI::Carrier>) -> bool {
+        true
+    }
+
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn make_noise(self, input_space: (DI, MI)) -> Fallible<Measurement<DI, MI, MO, DI::Carrier>> {
         DI::Atom::new_distribution(self.scale, self.k)?.make_noise(input_space)
     }
@@ -77,6 +86,11 @@ where
     proof_path = "measurements/noise/distribution/gaussian/NoisePrivacyMap_for_ZExpFamily2.tex"
 )]
 impl NoisePrivacyMap<L2Distance<RBig>, ZeroConcentratedDivergence> for ZExpFamily<2> {
+    // Outside the verified scope: assumed to meet the Proof Definition of `NoisePrivacyMap`.
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, creusot_std::macros::ensures(
+        forall<map: PrivacyMap<L2Distance<RBig>, ZeroConcentratedDivergence>> result == Ok(map) ==>
+            crate::verification::privacy::noise_map_private(*self, map)))]
     fn noise_privacy_map(
         &self,
         _input_metric: &L2Distance<RBig>,

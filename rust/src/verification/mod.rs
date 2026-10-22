@@ -80,6 +80,14 @@ pub mod clamped;
 #[cfg(creusot)]
 pub mod cast_metric;
 
+/// Specifications of the `dashu` arbitrary-precision operations used by verified code.
+#[cfg(creusot)]
+pub mod dashu;
+
+/// The privacy semantics of measurements and transformations.
+#[cfg(creusot)]
+pub mod privacy;
+
 /// Event-level dataset distances, and their stability under row-by-row maps.
 #[cfg(creusot)]
 pub mod rows;
@@ -98,11 +106,21 @@ pub trait MaybeEventModel {}
 #[cfg(not(creusot))]
 impl<T: ?Sized> MaybeEventModel for T {}
 
-// Specifications of `Ordering`'s predicates, which creusot-std does not specify.
+// Specifications of `std` items that creusot-std does not specify.
 #[cfg(creusot)]
-mod ordering_spec {
+mod std_spec {
     use core::cmp::Ordering;
-    use creusot_std::prelude::*;
+    use creusot_std::{prelude::*, std::ops::FnOnceExt};
+
+    extern_spec! {
+        impl<T, E> Result<T, E> {
+            #[requires(forall<e: E> self == Err(e) ==> op.precondition((e,)))]
+            #[ensures(forall<t: T> self == Ok(t) ==> result == Ok(t))]
+            #[ensures(forall<e: E> self == Err(e) ==>
+                exists<f: F> result == Err(f) && op.postcondition_once((e,), f))]
+            fn map_err<F, O: FnOnce(E) -> F>(self, op: O) -> Result<T, F>;
+        }
+    }
 
     extern_spec! {
         impl Ordering {

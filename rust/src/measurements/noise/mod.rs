@@ -8,6 +8,13 @@ use crate::{
     traits::samplers::{sample_discrete_gaussian, sample_discrete_laplace},
 };
 
+#[cfg(creusot)]
+use crate::verification::privacy::{
+    adds_noise, m_valid, noise_map_private, noise_measurement_valid,
+};
+#[cfg(creusot)]
+use creusot_std::macros::{ensures, proof_assert, snapshot};
+
 #[cfg(test)]
 mod test;
 
@@ -21,9 +28,17 @@ pub trait MakeNoise<DI: Domain, MI: Metric, MO: Measure>
 where
     (DI, MI): MetricSpace,
 {
+    /// Ghost model: what `make_noise` is proved to guarantee of the measurements it returns
+    /// (`m_valid(m)`, or nothing for impls outside the verified scope).
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic]
+    fn noise_claim(m: Measurement<DI, MI, MO, DI::Carrier>) -> bool;
+
     /// # Proof Definition
     /// For any choice of `self`, and any `input_space`,
     /// returns a valid measurement or error.
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, DI::Carrier>> result == Ok(m) ==>
+        Self::noise_claim(m)))]
     fn make_noise(self, input_space: (DI, MI)) -> Fallible<Measurement<DI, MI, MO, DI::Carrier>>;
 }
 
@@ -43,6 +58,8 @@ pub trait NoisePrivacyMap<MI: Metric, MO: Measure>: Sample {
     /// if $x, x'$ are `d_in`-close under `input_metric`, `privacy_map(d_in)` does not raise an exception,
     /// and `privacy_map(d_in) <= d_out`,
     /// then `function(x)`, `function(x')` are `d_out`-close under `output_measure`.
+    #[cfg_attr(creusot, ensures(forall<map: PrivacyMap<MI, MO>> result == Ok(map) ==>
+        noise_map_private(*self, map)))]
     fn noise_privacy_map(
         &self,
         input_metric: &MI,
@@ -85,6 +102,7 @@ pub trait Sample: 'static + Clone + Send + Sync {
 
 #[proven(proof_path = "measurements/noise/Sample_for_ZExpFamily1.tex")]
 impl Sample for ZExpFamily<1> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn sample(&self, shift: &IBig) -> Fallible<IBig> {
         Ok(shift + sample_discrete_laplace(self.scale.clone())?)
     }
@@ -92,6 +110,7 @@ impl Sample for ZExpFamily<1> {
 
 #[proven(proof_path = "measurements/noise/Sample_for_ZExpFamily2.tex")]
 impl Sample for ZExpFamily<2> {
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn sample(&self, shift: &IBig) -> Fallible<IBig> {
         Ok(shift + sample_discrete_gaussian(self.scale.clone())?)
     }
@@ -104,22 +123,45 @@ where
     (VectorDomain<AtomDomain<IBig>>, MI): MetricSpace,
     RV: NoisePrivacyMap<MI, MO>,
 {
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open)]
+    fn noise_claim(m: Measurement<VectorDomain<AtomDomain<IBig>>, MI, MO, Vec<IBig>>) -> bool {
+        m_valid(m)
+    }
+
     /// Make a Measurement that adds noise from the discrete distribution RV to each value in the input.
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<VectorDomain<AtomDomain<IBig>>, MI, MO, Vec<IBig>>>
+        result == Ok(m) ==> m_valid(m)))]
     fn make_noise(
         self,
         (input_domain, input_metric): (VectorDomain<AtomDomain<IBig>>, MI),
     ) -> Fallible<Measurement<VectorDomain<AtomDomain<IBig>>, MI, MO, Vec<IBig>>> {
-        let distribution = self.clone();
         let output_measure = MO::default();
         let privacy_map = self.noise_privacy_map(&input_metric, &output_measure)?;
-        Measurement::new(
+        #[cfg(creusot)]
+        let rv = snapshot!(self);
+        let result = Measurement::new(
             input_domain,
             input_metric,
             output_measure,
-            Function::new_fallible(move |x: &Vec<IBig>| {
-                x.into_iter().map(|x_i| distribution.sample(x_i)).collect()
-            }),
+            noise_function(self),
             privacy_map,
-        )
+        );
+        #[cfg(creusot)]
+        proof_assert!(forall<m: Measurement<VectorDomain<AtomDomain<IBig>>, MI, MO, Vec<IBig>>>
+            result == Ok(m) ==> noise_measurement_valid(m, *rv));
+        result
     }
+}
+
+/// The function that adds noise from `distribution` to each element of its input.
+// Trusted: the closure applies `distribution.sample` to each element, which by the Proof
+// Definition of `Sample` returns `x_i + Z_i`, with `Z_i` independent samples of `distribution`
+// (the samplers are not verified here).
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
+#[cfg_attr(creusot, ensures(adds_noise(result, distribution)))]
+fn noise_function<RV: Sample>(distribution: RV) -> Function<Vec<IBig>, Vec<IBig>> {
+    Function::new_fallible(move |x: &Vec<IBig>| {
+        x.into_iter().map(|x_i| distribution.sample(x_i)).collect()
+    })
 }

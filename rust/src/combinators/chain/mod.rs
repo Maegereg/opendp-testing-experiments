@@ -9,6 +9,8 @@ use crate::core::{
 };
 use crate::error::{Error, ErrorVariant, Fallible};
 #[cfg(creusot)]
+use crate::verification::privacy::{m_valid, t_valid};
+#[cfg(creusot)]
 use creusot_std::prelude::*;
 use std::fmt::Debug;
 
@@ -79,7 +81,12 @@ pub(crate) fn mismatch_error<T: Debug>(variant: ErrorVariant, struct1: &T, struc
 /// * `MI` - Input Metric.
 /// * `MX` - Intermediate Metric.
 /// * `MO` - Output Measure.
+// Trusted: `Function::make_chain` and `PrivacyMap::make_chain` wrap `dyn Fn` closures. The contract
+// is the chaining theorem (cited, Kind C): a valid transformation followed by a valid measurement,
+// whose domains and metrics match (checked), is a valid measurement whose map is the composition.
 #[cfg_attr(creusot, creusot_std::macros::trusted)]
+#[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+    (m_valid(*measurement1) && t_valid(*transformation0) ==> m_valid(m))))]
 pub fn make_chain_mt<DI, DX, TO, MI, MX, MO>(
     measurement1: &Measurement<DX, MX, MO, TO>,
     transformation0: &Transformation<DI, MI, DX, MX>,
@@ -208,7 +215,11 @@ where
 /// * `TO` - Output Type.
 /// * `MI` - Input Metric.
 /// * `MO` - Output Measure.
+// Trusted: as `make_chain_mt`. The contract is post-processing immunity (cited, Kind C): applying
+// a function to the output of a valid measurement gives a valid measurement with the same map.
 #[cfg_attr(creusot, creusot_std::macros::trusted)]
+#[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+    (m_valid(*measurement0) ==> m_valid(m))))]
 pub fn make_chain_pm<DI, TX, TO, MI, MO>(
     postprocess1: &Function<TX, TO>,
     measurement0: &Measurement<DI, MI, MO, TX>,

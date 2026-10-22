@@ -20,14 +20,16 @@ export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 # the verified components
 tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
   'transformations::clamp::*' 'transformations::manipulation::*' \
-  'transformations::cast_metric::*' 'combinators::chain::*' \
+  'transformations::scalar_to_vector::*' 'transformations::cast_metric::*' \
+  'combinators::chain::*' 'measurements::noise::*' \
   'verification::*' 'traits::*' 'domains::*' \
-  'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*'
+  'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*' \
+  'core::impl_Measurement_DI_MI_MO_TO::new'
 tools/creusot.sh 'transformations::sum::int::checked::*'   # one module
 ```
 
-The last two filters select `Function::make_chain` and `StabilityMap::make_chain` (Creusot numbers
-impl blocks). `'core::*'` also reports six failures in `Debug` impls and `invoke`, which are outside
+The last three filters select `Function::make_chain`, `StabilityMap::make_chain` and
+`Measurement::new` (Creusot numbers impl blocks). `'core::*'` also reports six failures in `Debug` impls and `invoke`, which are outside
 the verified components, as does a run without a filter (plus `PartialEq` for metrics).
 
 Lean (`verification/lean`, Mathlib v4.35.0, toolchain pinned by `lean-toolchain`):
@@ -404,3 +406,61 @@ Code changes:
   same results.
 - `traits::operations` is no longer a trusted module. Items in it outside the scope are trusted
   individually.
+
+## Status: `make_laplace` (phase 1: deterministic code)
+
+Verified, for every atom type (floats and integers, scalar and vector inputs): `make_laplace`
+returns valid measurements under `P = 1` (`noise_claim`), and for `f64` vectors and scalars and
+`i32` vectors, valid measurements (`make_laplace_*_valid`), given the assumptions listed in
+`TRUST.md`:
+- the discrete Laplace mechanism theorem (cited);
+- chaining and post-processing (cited);
+- the definitions of the metrics;
+- **the samplers draw the distributions they claim (not verified: phase 3)**.
+
+What is proved:
+
+1. **The float discretization** (`make_float_to_bigint`, `nature/float/proof.rs`). Each value is
+   clamped to the finite range and rounded to the nearest multiple of `2^k`, ties up
+   (`find_nearest_multiple_of_2k`, `floor_div`, `x_mul_2k`). On datasets in the input domain
+   within L1 distance `d_in`, the integer outputs are within `(d_in + rounding_distance) / 2^k`,
+   where `rounding_distance = size (2^k - 2^min_k)` (`get_rounding_distance`). Finite floats are
+   multiples of `2^min_k`, so rounding two of them moves their difference by less than `2^k`,
+   hence by at most `2^k - 2^min_k` (`round_lipschitz`, in integers).
+2. **The integer conversion** (`make_int_to_bigint`) and **`make_vec`** preserve distances.
+3. **The Laplace privacy map** (`NoisePrivacyMap` for `ZExpFamily<1>`): it rejects negative
+   scales and distances, returns 0 at `d_in = 0`, infinity when `scale = 0`, and otherwise
+   `d_in / scale` rounded up. This is the hypothesis of the mechanism theorem.
+4. **The mechanisms** (`MakeNoise` for integer vectors, the float and integer natures, `IBig`
+   scalars, `DiscreteLaplace`) and **`make_laplace`**: each chains these pieces with `>>`, whose
+   specifications are now verified. On the float path the noise scale is `scale / 2^k` on the
+   integer grid, so the loss is `((d_in + rounding_distance) / 2^k) / (scale / 2^k)`.
+
+`MakeNoise` has a ghost `noise_claim`: `m_valid(m)` for the verified impls (for `P = 1`), and
+`true` (no claim) for the Gaussian and geometric impls, which are out of scope.
+
+No bugs found.
+
+Mutation checks: each of the following makes verification fail:
+- the rounding distance without the factor `size` (code and contract): the stability theorem
+  fails;
+- no rounding distance at all (code and contract): the stability theorem fails;
+- a stability map scaling by `2^k` instead of `2^-k`;
+- a privacy map rounding down (`neg_inf_cast`);
+- no check that the scale is non-negative;
+- no check that the input domain excludes NaN;
+- rounding down instead of to nearest.
+
+Code changes (behavior unchanged):
+- The closures of `make_float_to_bigint`, `make_int_to_bigint` and the Laplace privacy map are
+  moved into functions with contracts (`discretize_vec`, `discretized_distance`,
+  `ints_to_bigints`, `to_rbig`, `laplace_loss`); the iterator chains become indexed loops.
+- `dashu` constants are replaced: `RBig::ONE` and `RBig::ZERO` by `RBig::from(1usize)` and
+  `RBig::from(0usize)`, and comparisons with zero by `sign()`. The literal `0.0` of the privacy
+  map is returned by `zero_loss()`.
+- In `get_rounding_distance`, the factor is computed before `distance *=`.
+- `MakeNoise` for integer vectors computes the privacy map before moving `self` into the noise
+  function (`noise_function`), instead of cloning it.
+- `AtomDomain` and `VectorDomain` have hand-written `Clone` impls (the same as the derived ones).
+
+Remaining phases: the mechanism theorem in Lean (phase 2), and the samplers (phase 3).

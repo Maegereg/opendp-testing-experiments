@@ -196,17 +196,36 @@ pub struct PrivacyMap<MI: Metric, MO: Measure>(
 
 impl<MI: Metric, MO: Measure> Clone for PrivacyMap<MI, MO> {
     #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(result.post() == self.post()))]
     fn clone(&self) -> Self {
         PrivacyMap(self.0.clone())
     }
 }
 
+// Under Creusot, a `PrivacyMap` carries a ghost model of the contract of the closure it wraps,
+// as `StabilityMap` does.
+#[cfg(creusot)]
+impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
+    /// Ghost model: the relation between input distances and results.
+    #[logic(opaque)]
+    pub fn post(self) -> Mapping<MI::Distance, Mapping<Fallible<MO::Distance>, bool>> {
+        dead
+    }
+}
+
 impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
     #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> inv(d) ==> map.precondition((&d,))))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: MO::Distance>
+        result.post()[d][Ok(r)] == map.postcondition((&d,), r)))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, e: Error> !result.post()[d][Err(e)]))]
     pub fn new(map: impl Fn(&MI::Distance) -> MO::Distance + 'static) -> Self {
         PrivacyMap(Arc::new(move |d_in: &MI::Distance| Ok(map(d_in))))
     }
     #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, requires(forall<d: MI::Distance> inv(d) ==> map.precondition((&d,))))]
+    #[cfg_attr(creusot, ensures(forall<d: MI::Distance, r: Fallible<MO::Distance>>
+        result.post()[d][r] == map.postcondition((&d,), r)))]
     pub fn new_fallible(map: impl Fn(&MI::Distance) -> Fallible<MO::Distance> + 'static) -> Self {
         PrivacyMap(Arc::new(map))
     }
@@ -229,6 +248,7 @@ impl<MI: Metric, MO: Measure> PrivacyMap<MI, MO> {
         })
     }
     #[cfg_attr(creusot, trusted)]
+    #[cfg_attr(creusot, ensures(self.post()[*input_distance][result]))]
     pub fn eval(&self, input_distance: &MI::Distance) -> Fallible<MO::Distance> {
         (self.0)(input_distance)
     }
@@ -367,6 +387,10 @@ impl<DI: Domain, MI: Metric, MO: Measure, TO> Measurement<DI, MI, MO, TO>
 where
     (DI, MI): MetricSpace,
 {
+    #[cfg_attr(creusot, ensures(forall<m: Self> result == Ok(m) ==>
+        m.input_domain == input_domain && m.input_metric == input_metric
+        && m.output_measure == output_measure
+        && m.function == function && m.privacy_map == privacy_map))]
     pub fn new(
         input_domain: DI,
         input_metric: MI,

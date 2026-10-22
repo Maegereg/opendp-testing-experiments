@@ -125,7 +125,6 @@ mod resize;
 pub use resize::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod scalar_to_vector;
 #[cfg(feature = "contrib")]
 pub use scalar_to_vector::*;

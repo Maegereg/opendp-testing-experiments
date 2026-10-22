@@ -12,6 +12,8 @@ use std::ops::Shr;
 use super::is_chain_tt;
 use super::{make_chain_mt, make_chain_pm, make_chain_tt};
 #[cfg(creusot)]
+use crate::verification::privacy::{m_valid, t_valid};
+#[cfg(creusot)]
 use creusot_std::prelude::*;
 
 // CHAINING TRANSFORMATION WITH TRANSFORMATION
@@ -95,7 +97,8 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
-    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+        (m_valid(rhs) && t_valid(self) ==> m_valid(m))))]
     fn shr(self, rhs: Measurement<DX, MX, MO, TO>) -> Self::Output {
         make_chain_mt(&rhs, &self)
     }
@@ -116,7 +119,9 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
-    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+        exists<t: Transformation<DI, MI, DX, MX>> self == Ok(t)
+            && (m_valid(rhs) && t_valid(t) ==> m_valid(m))))]
     fn shr(self, rhs: Measurement<DX, MX, MO, TO>) -> Self::Output {
         make_chain_mt(&rhs, &self?)
     }
@@ -144,7 +149,8 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
-    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+        (m_valid(self) ==> m_valid(m))))]
     fn shr(self, rhs: Function<TX, TO>) -> Self::Output {
         make_chain_pm(&rhs, &self)
     }
@@ -162,7 +168,8 @@ where
 {
     type Output = Fallible<Measurement<DI, MI, MO, TO>>;
 
-    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, ensures(forall<m: Measurement<DI, MI, MO, TO>> result == Ok(m) ==>
+        exists<m0: Measurement<DI, MI, MO, TX>> self == Ok(m0) && (m_valid(m0) ==> m_valid(m))))]
     fn shr(self, rhs: Function<TX, TO>) -> Self::Output {
         make_chain_pm(&rhs, &self?)
     }
