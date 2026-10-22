@@ -9,7 +9,8 @@ use creusot_std::{
     prelude::*,
 };
 
-use super::multiset::{count, count_bounds, decompose, same, sym_close};
+use super::multiset::{count, count_bounds, count_concat, count_push, decompose, same, sym_close};
+use super::rows_rel::{lift_hamming, lift_id, lift_sym, outputs, pairs, snd};
 use crate::metrics::{ChangeOneDistance, HammingDistance, InsertDeleteDistance, SymmetricDistance};
 
 /// The ghost model of an event-level metric: when two datasets are within distance `d`.
@@ -29,6 +30,25 @@ pub trait EventModel {
     #[requires(Self::close(x, y, d))]
     #[ensures(result && Self::close(x.map(f), y.map(f), d))]
     fn close_map<T, U>(x: Seq<T>, y: Seq<T>, d: Int, f: Mapping<T, U>) -> bool;
+
+    /// Relating every row by the same relation `r` (such as a random row function) preserves
+    /// closeness: for outputs `fx` related to `x` row by row, the result is related to `y` row by
+    /// row and close to `fx`. It keeps the outputs of the rows that `x` and `y` share, and takes
+    /// `g` (a related output of every row) for the others (`verification/rows_rel.rs`).
+    #[logic]
+    #[requires(Self::close(x, y, d))]
+    #[requires(fx.len() == x.len() && forall<i> 0 <= i && i < x.len() ==> r[(x[i], fx[i])])]
+    #[requires(forall<v: T> r[(v, g[v])])]
+    #[ensures(result.len() == y.len() && forall<j> 0 <= j && j < y.len() ==> r[(y[j], result[j])])]
+    #[ensures(Self::close(fx, result, d))]
+    fn close_rel<T, U>(
+        x: Seq<T>,
+        y: Seq<T>,
+        d: Int,
+        r: Mapping<(T, U), bool>,
+        g: Mapping<T, U>,
+        fx: Seq<U>,
+    ) -> Seq<U>;
 }
 
 /// Mapping commutes with dropping the last element.
@@ -159,6 +179,47 @@ pub fn id_close<T>(x: Seq<T>, y: Seq<T>, d: Int) -> bool {
     }
 }
 
+/// A subsequence and the deleted elements make up the sequence.
+#[logic]
+#[requires(sub(z, x, dx))]
+#[ensures(same(x, z.concat(dx)) && x.len() == z.len() + dx.len())]
+#[variant(x.len())]
+pub fn sub_same<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>) {
+    pearlite! {
+        if x.len() > 0 {
+            let xi = x.subsequence(0, x.len() - 1);
+            if dx.len() > 0 && dx[dx.len() - 1] == x[x.len() - 1]
+                && sub(z, xi, dx.subsequence(0, dx.len() - 1)) {
+                let di = dx.subsequence(0, dx.len() - 1);
+                sub_same(z, xi, di);
+                count_concat(z, di);
+                count_concat(z, dx);
+                proof_assert!(z.concat(dx).subsequence(0, z.len() + di.len()).ext_eq(z.concat(di)));
+            } else {
+                let zi = z.subsequence(0, z.len() - 1);
+                sub_same(zi, xi, dx);
+                count_concat(zi, dx);
+                count_concat(z, dx);
+                proof_assert!(z.ext_eq(zi.push_back(x[x.len() - 1])));
+                count_concat(zi.push_back(x[x.len() - 1]), dx);
+                count_concat(zi, dx.push_front(x[x.len() - 1]));
+            }
+        }
+    }
+}
+
+/// A common subsequence witnessing that `x` and `y` are within insert-delete distance `d`.
+#[logic]
+#[requires(id_close(x, y, d))]
+#[ensures(sub(result.0, x, result.1) && sub(result.0, y, result.2))]
+#[ensures(result.1.len() + result.2.len() <= d)]
+pub fn id_witness<T>(x: Seq<T>, y: Seq<T>, d: Int) -> (Seq<T>, Seq<T>, Seq<T>) {
+    pearlite! {
+        such_that(|w: (Seq<T>, Seq<T>, Seq<T>)|
+            sub(w.0, x, w.1) && sub(w.0, y, w.2) && w.1.len() + w.2.len() <= d)
+    }
+}
+
 /// Subsequences stay subsequences when every element is mapped by `f`.
 #[logic]
 #[requires(sub(z, x, dx))]
@@ -230,6 +291,29 @@ impl EventModel for SymmetricDistance {
         sym_close_map(x, y, d, f);
         true
     }
+
+    #[logic]
+    #[requires(Self::close(x, y, d))]
+    #[requires(fx.len() == x.len() && forall<i> 0 <= i && i < x.len() ==> r[(x[i], fx[i])])]
+    #[requires(forall<v: T> r[(v, g[v])])]
+    #[ensures(result.len() == y.len() && forall<j> 0 <= j && j < y.len() ==> r[(y[j], result[j])])]
+    #[ensures(Self::close(fx, result, d))]
+    fn close_rel<T, U>(
+        x: Seq<T>,
+        y: Seq<T>,
+        d: Int,
+        r: Mapping<(T, U), bool>,
+        g: Mapping<T, U>,
+        fx: Seq<U>,
+    ) -> Seq<U> {
+        pearlite! {
+            let p = pairs(x, fx, r);
+            let q = lift_sym(x, y, d, p, r, g);
+            sym_close_map(p, q, d, snd());
+            outputs(q, y, r);
+            q.map(snd())
+        }
+    }
 }
 
 impl EventModel for InsertDeleteDistance {
@@ -257,6 +341,29 @@ impl EventModel for InsertDeleteDistance {
             true
         }
     }
+
+    #[logic]
+    #[requires(Self::close(x, y, d))]
+    #[requires(fx.len() == x.len() && forall<i> 0 <= i && i < x.len() ==> r[(x[i], fx[i])])]
+    #[requires(forall<v: T> r[(v, g[v])])]
+    #[ensures(result.len() == y.len() && forall<j> 0 <= j && j < y.len() ==> r[(y[j], result[j])])]
+    #[ensures(Self::close(fx, result, d))]
+    fn close_rel<T, U>(
+        x: Seq<T>,
+        y: Seq<T>,
+        d: Int,
+        r: Mapping<(T, U), bool>,
+        g: Mapping<T, U>,
+        fx: Seq<U>,
+    ) -> Seq<U> {
+        pearlite! {
+            let p = pairs(x, fx, r);
+            let q = lift_id(x, y, d, p, r, g);
+            Self::close_map(p, q, d, snd());
+            outputs(q, y, r);
+            q.map(snd())
+        }
+    }
 }
 
 /// The change-one distance: datasets of the same size, whose symmetric distance is at most `2 d`.
@@ -280,6 +387,29 @@ impl EventModel for ChangeOneDistance {
         sym_close_map(x, y, 2 * d, f);
         true
     }
+
+    #[logic]
+    #[requires(Self::close(x, y, d))]
+    #[requires(fx.len() == x.len() && forall<i> 0 <= i && i < x.len() ==> r[(x[i], fx[i])])]
+    #[requires(forall<v: T> r[(v, g[v])])]
+    #[ensures(result.len() == y.len() && forall<j> 0 <= j && j < y.len() ==> r[(y[j], result[j])])]
+    #[ensures(Self::close(fx, result, d))]
+    fn close_rel<T, U>(
+        x: Seq<T>,
+        y: Seq<T>,
+        d: Int,
+        r: Mapping<(T, U), bool>,
+        g: Mapping<T, U>,
+        fx: Seq<U>,
+    ) -> Seq<U> {
+        pearlite! {
+            let p = pairs(x, fx, r);
+            let q = lift_sym(x, y, 2 * d, p, r, g);
+            sym_close_map(p, q, 2 * d, snd());
+            outputs(q, y, r);
+            q.map(snd())
+        }
+    }
 }
 
 /// The Hamming distance: datasets of the same size, differing in at most `d` positions.
@@ -302,5 +432,28 @@ impl EventModel for HammingDistance {
     fn close_map<T, U>(x: Seq<T>, y: Seq<T>, d: Int, f: Mapping<T, U>) -> bool {
         hamming_map(x, y, f);
         true
+    }
+
+    #[logic]
+    #[requires(Self::close(x, y, d))]
+    #[requires(fx.len() == x.len() && forall<i> 0 <= i && i < x.len() ==> r[(x[i], fx[i])])]
+    #[requires(forall<v: T> r[(v, g[v])])]
+    #[ensures(result.len() == y.len() && forall<j> 0 <= j && j < y.len() ==> r[(y[j], result[j])])]
+    #[ensures(Self::close(fx, result, d))]
+    fn close_rel<T, U>(
+        x: Seq<T>,
+        y: Seq<T>,
+        d: Int,
+        r: Mapping<(T, U), bool>,
+        g: Mapping<T, U>,
+        fx: Seq<U>,
+    ) -> Seq<U> {
+        pearlite! {
+            let p = pairs(x, fx, r);
+            let q = lift_hamming(x, y, p, r, g);
+            hamming_map(p, q, snd());
+            outputs(q, y, r);
+            q.map(snd())
+        }
     }
 }

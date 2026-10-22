@@ -19,6 +19,27 @@ fn test_impute_uniform() -> Fallible<()> {
     Ok(())
 }
 
+/// FINDINGS.md F5: `Uniform::new` panics on infinite bounds, so they are rejected when the
+/// transformation is built, rather than panicking on the first NaN row.
+#[test]
+fn test_impute_uniform_rejects_infinite_bounds() -> Fallible<()> {
+    for bounds in [
+        (0.0, f64::INFINITY),
+        (f64::NEG_INFINITY, 0.0),
+        (f64::NAN, 1.0),
+    ] {
+        assert!(
+            make_impute_uniform_float(
+                VectorDomain::new(AtomDomain::default()),
+                SymmetricDistance,
+                bounds,
+            )
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn test_impute_constant_option() -> Fallible<()> {
     let imputer = make_impute_constant(

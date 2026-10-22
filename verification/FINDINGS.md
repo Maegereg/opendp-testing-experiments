@@ -150,6 +150,36 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   `map(d) = 2 d` (`resize_id_id_stable` for this one). `test_insert_delete_boundary_stability`
   (the counterexample, which failed before the fix) and `test_insert_delete_keeps_order` check it.
 
+### F5. `make_impute_uniform_float` panics on infinite bounds, depending on the data
+
+- **Where:** `rust/src/transformations/impute/mod.rs` (`make_impute_uniform_float`), for `f32` and
+  `f64`. Reachable from Python and the FFI.
+- **What:** The constructor rejects NaN bounds and `lower >= upper`, but not infinite bounds. The
+  row function samples from `rand`'s `Uniform::from(lower..upper)`, whose constructor panics unless
+  both bounds are finite. With bounds `(0, ∞)` the transformation is built, returns datasets without
+  NaN unchanged, and panics on the first dataset with a NaN row.
+- **How found:** Reading the code to plan its proof, then confirmed by proof and by running it. The
+  sampler is specified with `rand`'s preconditions (finite bounds, `lower < upper`); after the
+  constructor's checks, the bounds are proved non-NaN and ordered, and only their finiteness fails.
+- **Impact:** Whether the transformation panics reveals whether the data contains a null. In a
+  process that does not recover from panics, a data-dependent crash.
+- **Fix:** Reject non-finite bounds when the transformation is built.
+- **Status:** Fixed on this branch (`test_impute_uniform_rejects_infinite_bounds`). With the check,
+  the transformation is proved to meet its contract and to be stable.
+
+### F6. `make_impute_uniform_float` samples only part of very wide bounds
+
+- **Where:** `rust/src/transformations/impute/mod.rs`, with finite bounds whose width
+  `upper - lower` overflows, e.g. `(-f64::MAX, f64::MAX)`.
+- **What:** `rand` 0.7's `UniformFloat::new` computes the width `upper - lower` (infinite here) and
+  shrinks it until `lower + width * max_rand < upper`, ending at `f64::MAX`, so samples cover only
+  `[lower, lower + MAX)`. With `(-MAX, MAX)`, 2000 imputed samples all lay in `[-MAX, 0)`. The
+  documentation promises "uniformly distributed floats within `bounds`".
+- **Impact:** None on privacy or on the output domain: the samples are finite and within the bounds,
+  which is all the proof needs. The imputed distribution differs from the documented one.
+- **Fix:** Reject bounds whose width is not finite, or document the restriction.
+- **Status:** Not fixed (recorded only).
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`
@@ -227,6 +257,21 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 - **Why it is still sound:** the constant cancels in the privacy proof, and the sampler's proof
   uses the correct one. Only the documented definition is wrong.
 - **Fix (on the branch):** the four occurrences are corrected.
+
+### D6. `make_impute_uniform_float` passes a random row function to `make_row_by_row`
+
+- **Where:** `rust/src/transformations/impute/mod.rs`; the proof of `make_row_by_row`
+  (`transformations/manipulation/make_row_by_row.tex`).
+- **What:** `make_row_by_row`'s proof requires of the caller that "`row_function` has no
+  side-effects", and its stability argument maps each row by a function. The imputer's row
+  function draws randomness, so the cited proof does not cover it, and `make_impute_uniform_float`
+  has no proof of its own.
+- **Why it is still sound:** The rows of the input are imputed independently. Coupling the samples
+  of the rows that two neighbouring datasets share, and sampling the other rows freely, gives
+  outputs within the same distance. The proof here states this for row-by-row relations
+  (`EventModel::close_rel`, for all four event-level metrics) and applies it to the imputer.
+- **Suggestion:** State `make_row_by_row`'s precondition as "independent per row" rather than "no
+  side-effects", or give the imputer its own proof.
 
 ## Tool limitations (Creusot v0.14.0)
 

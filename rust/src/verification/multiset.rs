@@ -154,3 +154,34 @@ pub fn count_range<T>(s: Seq<T>) {
 pub fn kcount_empty<T>(k: Seq<T>, s: Seq<T>) {
     pearlite! { if k.len() > 0 { kcount_empty(k.subsequence(0, k.len() - 1), s) } }
 }
+
+/// Multiset-equal sequences have the same length.
+#[logic]
+#[requires(same(a, b))]
+#[ensures(a.len() == b.len())]
+#[variant(a.len())]
+pub fn same_len<T>(a: Seq<T>, b: Seq<T>) {
+    pearlite! {
+        if a.len() == 0 {
+            if b.len() > 0 {
+                count_bounds(b.subsequence(0, b.len() - 1), b[b.len() - 1]);
+                proof_assert!(count(b, b[b.len() - 1]) > 0);
+            }
+        } else {
+            let e = a[a.len() - 1];
+            let ai = a.subsequence(0, a.len() - 1);
+            count_bounds(ai, e);
+            let j = super::rows::index_of(b, e);
+            super::rows::count_removed(b, j);
+            same_len(ai, b.removed(j))
+        }
+    }
+}
+
+/// Appending an element adds one occurrence.
+#[logic]
+#[ensures(forall<w: T> count(s.push_back(v), w) == count(s, w) + if v == w { 1 } else { 0 })]
+#[ensures(s.push_back(v).subsequence(0, s.len()) == s)]
+pub fn count_push<T>(s: Seq<T>, v: T) {
+    pearlite! { proof_assert!(s.push_back(v).subsequence(0, s.len()).ext_eq(s)) }
+}

@@ -126,8 +126,43 @@ impl<DIA: Domain, DOA: Domain> RowByRowDomain<VectorDomain<DOA>> for VectorDomai
     }
 }
 
+/// The contract of [`make_row_by_row`] on success: as [`row_by_row_contract`], for a row function
+/// `f` that cannot fail. The function maps each row by `f`, and never fails.
+#[cfg(creusot)]
+#[logic(open, prophetic)]
+pub fn row_by_row_infallible_contract<DI, DO, M, F>(
+    t: Transformation<DI, M, DO, M>,
+    input_domain: DI,
+    output_row_domain: DO::ElementDomain,
+    f: F,
+) -> bool
+where
+    DI: RowByRowDomain<DO>,
+    DO: DatasetDomain,
+    M: EventLevelMetric,
+    (DI, M): MetricSpace,
+    (DO, M): MetricSpace,
+    F: Fn(&<DI::ElementDomain as Domain>::Carrier) -> <DO::ElementDomain as Domain>::Carrier,
+{
+    pearlite! {
+        t.input_domain == input_domain
+        && t.output_domain == input_domain.translated(output_row_domain)
+        && (forall<x: DI::Carrier> inv(x) && (forall<i> 0 <= i && i < DI::rows(x).len() ==>
+                inv(DI::rows(x)[i]) && f.precondition((&DI::rows(x)[i],)))
+            ==> t.function.pre()[x])
+        && (forall<x: DI::Carrier, y: DO::Carrier> t.function.post()[x][Ok(y)] ==>
+            DO::rows(y).len() == DI::rows(x).len()
+            && forall<i> 0 <= i && i < DI::rows(x).len() ==>
+                f.postcondition((&DI::rows(x)[i],), DO::rows(y)[i]))
+        && (forall<x: DI::Carrier, r: Fallible<DO::Carrier>> t.function.post()[x][r] ==>
+            exists<y: DO::Carrier> r == Ok(y))
+        && (forall<d: IntDistance, o: IntDistance> t.stability_map.post()[d][Ok(o)] ==> o@ >= d@)
+    }
+}
+
 /// Constructs a [`Transformation`] representing an arbitrary row-by-row transformation.
-#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(forall<t: Transformation<DI, M, DO, M>> result == Ok(t) ==>
+    row_by_row_infallible_contract(t, input_domain, output_row_domain, row_function)))]
 pub(crate) fn make_row_by_row<DI, DO, M>(
     input_domain: DI,
     input_metric: M,
@@ -146,8 +181,15 @@ where
     (DI, M): MetricSpace,
     (DO, M): MetricSpace,
 {
-    let row_function = move |arg: &<DI::ElementDomain as Domain>::Carrier| Ok(row_function(arg));
-    make_row_by_row_fallible(input_domain, input_metric, output_row_domain, row_function)
+    #[cfg(creusot)]
+    let f = snapshot!(row_function);
+    let wrapped = move |arg: &<DI::ElementDomain as Domain>::Carrier| Ok(row_function(arg));
+    #[cfg(creusot)]
+    proof_assert!(forall<a: <DI::ElementDomain as Domain>::Carrier> inv(a) && f.precondition((&a,)) ==> wrapped.precondition((&a,)));
+    #[cfg(creusot)]
+    proof_assert!(forall<a: <DI::ElementDomain as Domain>::Carrier, r: Fallible<<DO::ElementDomain as Domain>::Carrier>>
+        wrapped.postcondition((&a,), r) ==> exists<w: <DO::ElementDomain as Domain>::Carrier> r == Ok(w) && f.postcondition((&a,), w));
+    make_row_by_row_fallible(input_domain, input_metric, output_row_domain, wrapped)
 }
 
 /// The contract of [`make_row_by_row_fallible`] on success.

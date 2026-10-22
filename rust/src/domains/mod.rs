@@ -155,6 +155,7 @@ impl<T: CheckAtom> AtomDomain<T> {
 }
 
 impl<T: CheckAtom> AtomDomain<T> {
+    #[cfg_attr(creusot, ensures(!result.has_nan()))]
     pub fn new_non_nan() -> Self {
         AtomDomain {
             bounds: None,

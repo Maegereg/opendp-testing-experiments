@@ -12,6 +12,15 @@ use crate::traits::{CheckAtom, CheckNull, Float, HasNull};
 use crate::transformations::make_row_by_row;
 use rand::distributions::{Distribution, Uniform, uniform::SampleUniform};
 
+#[cfg(creusot)]
+mod proof;
+#[cfg(creusot)]
+use crate::verification::{RealModel, float::FloatModel};
+#[cfg(creusot)]
+use creusot_std::macros::{ensures, requires, trusted};
+#[cfg(creusot)]
+pub use proof::*;
+
 #[bootstrap(
     features("contrib"),
     generics(M(suppress), TA(suppress)),
@@ -27,6 +36,8 @@ use rand::distributions::{Distribution, Uniform, uniform::SampleUniform};
 /// # Generics
 /// * `M` - Metric Type. A dataset metric.
 /// * `TA` - Atomic Type of data being imputed. One of `f32` or `f64`
+#[cfg_attr(creusot, ensures(forall<t: Transformation<VectorDomain<AtomDomain<TA>>, M, VectorDomain<AtomDomain<TA>>, M>>
+    result == Ok(t) ==> impute_uniform_contract(t, input_domain, bounds)))]
 pub fn make_impute_uniform_float<M, TA>(
     input_domain: VectorDomain<AtomDomain<TA>>,
     input_metric: M,
@@ -38,30 +49,76 @@ where
     (VectorDomain<AtomDomain<TA>>, M): MetricSpace,
 {
     let (lower, upper) = bounds;
-    if lower.is_nan() {
+    if is_nan(&lower) {
         return fallible!(MakeTransformation, "lower may not be nan");
     }
-    if upper.is_nan() {
+    if is_nan(&upper) {
         return fallible!(MakeTransformation, "upper may not be nan");
     }
-    if lower >= upper {
+    if !is_finite(&lower) || !is_finite(&upper) {
+        return fallible!(MakeTransformation, "bounds must be finite");
+    }
+    // `lower >= upper`, as neither is NaN
+    if !lt(lower, upper) {
         return fallible!(MakeTransformation, "lower must be smaller than upper");
     }
 
+    #[cfg(creusot)]
+    creusot_std::macros::proof_assert!(finite_non_null::<TA>());
     make_row_by_row(
         input_domain,
         input_metric,
         AtomDomain::new_non_nan(),
-        move |v| {
-            if v.is_null() {
-                let mut rng = GeneratorOpenDP::new();
-                let sample = Uniform::from(lower..upper).sample(&mut rng);
-                rng.error.map(|_| sample).unwrap_or(lower)
-            } else {
-                *v
-            }
-        },
+        move |v: &TA| impute_row(v, lower, upper),
     )
+}
+
+/// Replaces a null (NaN) row with a sample from `[lower, upper)`.
+#[cfg_attr(creusot, requires(lower.finite() && upper.finite() && lower.real() < upper.real()))]
+#[cfg_attr(creusot, ensures(imputed(*v, result, lower, upper)))]
+fn impute_row<TA: Float + SampleUniform>(v: &TA, lower: TA, upper: TA) -> TA {
+    if is_nan(v) {
+        sample_uniform(lower, upper)
+    } else {
+        *v
+    }
+}
+
+/// A sample from the uniform distribution on `[lower, upper)`, or `lower` if the system lacks
+/// entropy.
+// Trusted: `Uniform::new` panics unless `lower < upper` and both are finite, and then samples
+// `lower + u * scale` with `scale` chosen so that every sample is below `upper`.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, requires(lower.finite() && upper.finite() && lower.real() < upper.real()))]
+#[cfg_attr(creusot, ensures(result.finite() && lower.real() <= result.real() && result.real() < upper.real()))]
+fn sample_uniform<TA: Float + SampleUniform>(lower: TA, upper: TA) -> TA {
+    let mut rng = GeneratorOpenDP::new();
+    let sample = Uniform::from(lower..upper).sample(&mut rng);
+    rng.error.map(|_| sample).unwrap_or(lower)
+}
+
+/// `v` is NaN, which for floats is `CheckNull::is_null`.
+// Trusted: `non_null` is the ghost model of non-NaN floats.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(result == !v.non_null()))]
+fn is_nan<TA: Float>(v: &TA) -> bool {
+    v.is_null()
+}
+
+/// `v` is finite.
+// Trusted: `finite` is the ghost model of finite floats.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(result == v.finite()))]
+fn is_finite<TA: Float>(v: &TA) -> bool {
+    v.is_finite()
+}
+
+/// `a < b`.
+// Trusted: IEEE `<` on finite values is `<` on the reals.
+#[cfg_attr(creusot, trusted)]
+#[cfg_attr(creusot, ensures(a.finite() && b.finite() ==> result == (a.real() < b.real())))]
+fn lt<TA: Float>(a: TA, b: TA) -> bool {
+    a < b
 }
 
 /// Utility trait to impute with a constant, regardless of the representation of nullity.
@@ -91,6 +148,7 @@ pub trait ImputeConstantDomain: Domain {
 // how to impute, when null represented as `Option<T>`
 impl<T: CheckAtom> ImputeConstantDomain for OptionDomain<AtomDomain<T>> {
     type Imputed = T;
+    #[cfg_attr(creusot, trusted)]
     fn impute_constant<'a>(
         default: &'a Self::Carrier,
         constant: &'a Self::Imputed,
@@ -101,6 +159,7 @@ impl<T: CheckAtom> ImputeConstantDomain for OptionDomain<AtomDomain<T>> {
 // how to impute, when null represented as T with internal nullity
 impl<T: CheckAtom + HasNull> ImputeConstantDomain for AtomDomain<T> {
     type Imputed = Self::Carrier;
+    #[cfg_attr(creusot, trusted)]
     fn impute_constant<'a>(
         default: &'a Self::Carrier,
         constant: &'a Self::Imputed,
@@ -109,6 +168,7 @@ impl<T: CheckAtom + HasNull> ImputeConstantDomain for AtomDomain<T> {
     }
 }
 
+#[cfg_attr(creusot, trusted)]
 #[bootstrap(
     features("contrib"),
     arguments(constant(
@@ -179,6 +239,7 @@ pub trait DropNullDomain: Domain {
 /// how to standardize into an option, when null represented as `Option<T>`
 impl<T: CheckAtom + Clone> DropNullDomain for OptionDomain<AtomDomain<T>> {
     type Imputed = T;
+    #[cfg_attr(creusot, trusted)]
     fn option(value: &Self::Carrier) -> Option<T> {
         if value.is_null() { None } else { value.clone() }
     }
@@ -186,6 +247,7 @@ impl<T: CheckAtom + Clone> DropNullDomain for OptionDomain<AtomDomain<T>> {
 /// how to standardize into an option, when null represented as T with internal nullity
 impl<T: CheckAtom + HasNull + Clone> DropNullDomain for AtomDomain<T> {
     type Imputed = T;
+    #[cfg_attr(creusot, trusted)]
     fn option(value: &Self::Carrier) -> Option<T> {
         if value.is_null() {
             None
@@ -195,6 +257,7 @@ impl<T: CheckAtom + HasNull + Clone> DropNullDomain for AtomDomain<T> {
     }
 }
 
+#[cfg_attr(creusot, trusted)]
 #[bootstrap(features("contrib"), generics(DIA(suppress), M(suppress)))]
 /// Make a Transformation that drops null values.
 ///

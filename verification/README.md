@@ -21,7 +21,7 @@ export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
   'transformations::clamp::*' 'transformations::manipulation::*' \
   'transformations::scalar_to_vector::*' 'transformations::cast_metric::*' \
-  'transformations::resize::*' 'combinators::chain::*' 'measurements::noise::*' \
+  'transformations::resize::*' 'transformations::impute::*' 'combinators::chain::*' 'measurements::noise::*' \
   'verification::*' 'traits::*' 'domains::*' \
   'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*' \
   'core::impl_Measurement_DI_MI_MO_TO::new'
@@ -477,6 +477,53 @@ Code changes:
   instead of an iterator chain.
 - `IsMetricOrdered` requires `MaybeEventModel` (empty outside Creusot).
 - `transformations::resize` is no longer a trusted module.
+
+## Status: `make_impute_uniform_float`
+
+Verified (`rust/src/transformations/impute/proof.rs`) for `f32` and `f64` and every event-level
+metric `M`, after fixing F5 (`FINDINGS.md`).
+
+1. **The constructor meets its contract** (`impute_uniform_contract`). On success:
+   - The bounds are finite, with `lower < upper`.
+   - The output domain excludes NaN, and keeps the input's size.
+   - The function can be evaluated on any dataset and never fails. Each output row is the input row
+     if it is not NaN, and otherwise a finite value in `[lower, upper)` (`imputed`). No output row
+     is NaN.
+   - The stability map returns at least `d_in`.
+2. **Stability** (`impute_uniform_stable`). For datasets `x`, `y` within `d` under `M`, every
+   possible output of `x` is matched with a possible output of `y` within the map. The row function
+   is random, so it relates rows to outputs instead of mapping them. `EventModel::close_rel`
+   (`verification/rows_rel.rs`) shows, for each of the four event-level metrics, that relating
+   every row by the same relation preserves closeness. Rows shared by `x` and `y` keep their
+   outputs, and the other rows of `y` take any related output. The proof pairs each row with its
+   output, lifts the witness of closeness (multiset decomposition, common subsequence, or
+   positions) to the pairs, and projects onto the outputs with `close_map`. That this matching is a
+   coupling (the shared rows get the same sample) is assumed (`TRUST.md`).
+3. **`make_row_by_row`** now has a contract (`row_by_row_infallible_contract`), proved from
+   `make_row_by_row_fallible`'s.
+
+Found and fixed: F5, infinite bounds were accepted, and the first NaN row then panicked. Found and
+recorded: F6, bounds whose width overflows are sampled only in part, and D6, the random row function
+is outside the cited proof of `make_row_by_row`.
+
+Trusted: `sample_uniform` (`rand`'s preconditions and range), `is_nan`, `lt`, `is_finite`,
+`finite_non_null`, `AtomDomain::new_non_nan`, and the coupling of row-by-row relations
+(`TRUST.md`).
+
+Mutation checks: each of the following makes verification fail:
+- removing the finiteness check (F5), or the check that `lower < upper`;
+- imputing every row, or no row;
+- an output domain that allows NaN.
+
+Code changes:
+- F5: `make_impute_uniform_float` rejects non-finite bounds.
+- The row closure calls `impute_row`. The sampling, the NaN test and the comparison of the bounds
+  are wrapped in `sample_uniform`, `is_nan` and `lt`, with the same results (`lower >= upper` is
+  `!(lower < upper)` once NaN is excluded).
+- `transformations::impute` is no longer a trusted module. Its other items are trusted
+  individually.
+- `same_len`, `count_push`, `sub_same` and `id_witness` moved from `make_resize`'s proof to
+  `verification/{multiset,rows}.rs`.
 
 ## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 

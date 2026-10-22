@@ -26,8 +26,10 @@ use crate::{
     },
     transformations::IsMetricOrdered,
     verification::{
-        multiset::{count, count_bounds, count_concat, decompose, same, sym_close},
-        rows::{EventModel, count_removed, hamming, id_close, index_of, sub},
+        multiset::{
+            count, count_bounds, count_concat, count_push, decompose, same, same_len, sym_close,
+        },
+        rows::{EventModel, count_removed, hamming, id_close, id_witness, index_of, sub, sub_same},
     },
 };
 
@@ -190,29 +192,6 @@ pub fn resize_contract<
 // Sequences as multisets
 // ---------------------------------------------------------------------------------------------
 
-/// Multiset-equal sequences have the same length.
-#[logic]
-#[requires(same(a, b))]
-#[ensures(a.len() == b.len())]
-#[variant(a.len())]
-pub fn same_len<T>(a: Seq<T>, b: Seq<T>) {
-    pearlite! {
-        if a.len() == 0 {
-            if b.len() > 0 {
-                count_bounds(b.subsequence(0, b.len() - 1), b[b.len() - 1]);
-                proof_assert!(count(b, b[b.len() - 1]) > 0);
-            }
-        } else {
-            let e = a[a.len() - 1];
-            let ai = a.subsequence(0, a.len() - 1);
-            count_bounds(ai, e);
-            let j = index_of(b, e);
-            count_removed(b, j);
-            same_len(ai, b.removed(j))
-        }
-    }
-}
-
 /// Occurrences in `n` copies of `c`.
 #[logic]
 #[requires(n >= 0)]
@@ -234,35 +213,6 @@ pub fn count_rep<T>(c: T, n: Int) {
 #[ensures(rep(c, n + m) == rep(c, n).concat(rep(c, m)))]
 pub fn rep_concat<T>(c: T, n: Int, m: Int) {
     pearlite! { proof_assert!(rep(c, n + m).ext_eq(rep(c, n).concat(rep(c, m)))) }
-}
-
-/// A subsequence and the deleted elements make up the sequence.
-#[logic]
-#[requires(sub(z, x, dx))]
-#[ensures(same(x, z.concat(dx)) && x.len() == z.len() + dx.len())]
-#[variant(x.len())]
-pub fn sub_same<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>) {
-    pearlite! {
-        if x.len() > 0 {
-            let xi = x.subsequence(0, x.len() - 1);
-            if dx.len() > 0 && dx[dx.len() - 1] == x[x.len() - 1]
-                && sub(z, xi, dx.subsequence(0, dx.len() - 1)) {
-                let di = dx.subsequence(0, dx.len() - 1);
-                sub_same(z, xi, di);
-                count_concat(z, di);
-                count_concat(z, dx);
-                proof_assert!(z.concat(dx).subsequence(0, z.len() + di.len()).ext_eq(z.concat(di)));
-            } else {
-                let zi = z.subsequence(0, z.len() - 1);
-                sub_same(zi, xi, dx);
-                count_concat(zi, dx);
-                count_concat(z, dx);
-                proof_assert!(z.ext_eq(zi.push_back(x[x.len() - 1])));
-                count_concat(zi.push_back(x[x.len() - 1]), dx);
-                count_concat(zi, dx.push_front(x[x.len() - 1]));
-            }
-        }
-    }
 }
 
 /// A common subsequence of two sequences of the same length, keeping the positions where they
@@ -301,14 +251,6 @@ pub fn hamming_id<T>(p: Seq<T>, q: Seq<T>, e: Int) -> bool {
         let (z, ep, eq) = hamming_sub(p, q);
         true
     }
-}
-
-/// Appending an element adds one occurrence.
-#[logic]
-#[ensures(forall<w: T> count(s.push_back(v), w) == count(s, w) + if v == w { 1 } else { 0 })]
-#[ensures(s.push_back(v).subsequence(0, s.len()) == s)]
-pub fn count_push<T>(s: Seq<T>, v: T) {
-    pearlite! { proof_assert!(s.push_back(v).subsequence(0, s.len()).ext_eq(s)) }
 }
 
 /// If `p` consists of `c` and `a`, and `b` has as many elements as `a`, then some ordering of `c`
@@ -706,18 +648,6 @@ pub fn match_id_pad_trunc<T>(
         count_concat(zr.concat(dx), rep(k, s - x.len()));
         count_concat(zj, a);
         (zj, a, ey)
-    }
-}
-
-/// A common subsequence witnessing that `x` and `y` are within insert-delete distance `d`.
-#[logic]
-#[requires(id_close(x, y, d))]
-#[ensures(sub(result.0, x, result.1) && sub(result.0, y, result.2))]
-#[ensures(result.1.len() + result.2.len() <= d)]
-pub fn id_witness<T>(x: Seq<T>, y: Seq<T>, d: Int) -> (Seq<T>, Seq<T>, Seq<T>) {
-    pearlite! {
-        such_that(|w: (Seq<T>, Seq<T>, Seq<T>)|
-            sub(w.0, x, w.1) && sub(w.0, y, w.2) && w.1.len() + w.2.len() <= d)
     }
 }
 

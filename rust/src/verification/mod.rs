@@ -92,6 +92,10 @@ pub mod privacy;
 #[cfg(creusot)]
 pub mod rows;
 
+/// Event-level dataset distances under row-by-row relations (random row functions).
+#[cfg(creusot)]
+pub mod rows_rel;
+
 /// A supertrait of [`EventLevelMetric`](crate::metrics::EventLevelMetric) that is
 /// [`EventModel`](rows::EventModel) under Creusot, and empty otherwise.
 #[cfg(creusot)]

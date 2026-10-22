@@ -79,7 +79,6 @@ mod variance;
 pub use variance::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod impute;
 #[cfg(feature = "contrib")]
 pub use impute::*;
