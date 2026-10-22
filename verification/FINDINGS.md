@@ -180,6 +180,53 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 - **Fix:** Reject bounds whose width is not finite, or document the restriction.
 - **Status:** Not fixed (recorded only).
 
+### F7. The threshold privacy maps understate δ by one point of mass
+
+- **Where:** `rust/src/measurements/noise_threshold/distribution/laplace/mod.rs`,
+  `NoiseThresholdPrivacyMap for ZExpFamily<1>` (`make_laplace_threshold`), and its proof
+  `NoiseThresholdPrivacyMap_for_ZExpFamily1.tex`. The Gaussian map
+  (`distribution/gaussian/mod.rs`, `make_gaussian_threshold`) has the same pattern (out of scope;
+  confirmed by running it only).
+- **What:** The function keeps a key when its noisy value is at least the threshold
+  (`v + Z ≥ T`). A key present in only one of two neighbouring maps, with value at most `Δ∞`, is
+  therefore released with probability up to `Pr[Z ≥ T - Δ∞]`, and an `(ε, δ)` guarantee needs
+  `δ ≥ Pr[Z ≥ T - Δ∞]` (for one such key). The map computes `δ` from
+  `conservative_{discrete,continuous}_laplacian_tail_to_alpha(scale, T - Δ∞)`, which bound
+  `Pr[Z > T - Δ∞]`, and the proof treats `v + Z = T` as discarded (`Pr[c_j + Z_j ≤ T]`). For the
+  discrete Laplace, `Pr[Z > d] = e^{-1/s} Pr[Z ≥ d]`, so `δ` is too small by a factor `e^{1/s}`
+  (the continuous fallback `e^{-d/s}/2` is also below `Pr[Z ≥ d]`).
+- **Confirmed:**
+  - By proof (`verification/lean/OpenDPVerification/Threshold.lean`): the code's discrete tail
+    formula `e^{-d/s} / (e^{1/s} + 1)` is exactly `Pr[Z > d]` (`discrete_bound_eq`), and both it and
+    `e^{-d/s} / 2` are strictly below the release probability `Pr[Z ≥ d]`
+    (`threshold_delta_too_small`).
+  - By running it: with scale 1, threshold 3 and `d_in = (1, 1, 1)`, `{true: 1}` releases `true`
+    with probability 0.099 (exact `Pr[Z ≥ 2]` = 0.0989; `{}` never releases it), but the map
+    returns `δ = 0.036` (`Pr[Z > 2]`). Gaussian, scale 1, threshold 3: 0.059 against
+    `δ = 0.023`.
+- **Impact:** The `(ε, δ)` guarantee of `make_laplace_threshold` is wrong: the actual `δ` is up to
+  `e^{1/scale}` times the reported one (2.7 times at scale 1). Reachable from Python and the FFI.
+- **Status:** Confirmed, not yet fixed.
+
+### F8. The threshold mechanisms leak keys whose value is zero
+
+- **Where:** the same function and privacy map; the input metric `L0PInfDistance`
+  (`metrics/mod.rs`).
+- **What:** The metric's Proof Definition reads a missing key as the additive identity: `{k: 0}` and
+  `{}` are at distance `(0, 0, 0)`, and more generally a key with value 0 present in only one map
+  does not count towards `l0`. The privacy map returns `(0, 0)` when the sensitivity is zero, and
+  otherwise counts only `l0` unstable keys. But the mechanism releases a key with value 0 when
+  `Z ≥ T`, with positive probability, and never releases a missing key.
+- **Confirmed:**
+  - By proof: a key with value 0 is released with positive probability (`zero_key_released`).
+  - By running it: with scale 1 and threshold 1, `map((0, 0, 0)) = (0, 0)`, but `{true: 0}`
+    releases `true` 27% of the time and `{}` never.
+- **Impact:** Neighbouring maps that differ in keys with value 0 are distinguished with probability
+  not covered by the privacy map (at distance 0, any positive probability violates `(0, 0)`). Maps
+  from `make_count_by` hold only observed keys with positive counts, so the common pipeline is not
+  affected; maps built otherwise (or after transformations that can produce zeros) are.
+- **Status:** Confirmed, not yet fixed.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`
