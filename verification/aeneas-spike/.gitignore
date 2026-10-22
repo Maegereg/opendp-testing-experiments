@@ -1,0 +1,10 @@
+out/
+rust/target/
+rust/Cargo.lock
+lean/.lake/
+lean/lake-manifest.json
+lean/Samplers.lean
+lean/Samplers/Types.lean
+lean/Samplers/Funs.lean
+lean/Samplers/TypesExternal.lean
+lean/Samplers/FunsExternal.lean

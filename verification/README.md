@@ -490,4 +490,67 @@ Only Lean's standard axioms are used (`#print axioms`: `propext`, `Classical.cho
 OpenDP's documentation gave the normalizing constant as `(e^{-1/s} - 1) / (e^{-1/s} + 1)`,
 which is negative (`FINDINGS.md` D5); it is corrected on the branch.
 
-Remaining phase: the samplers (phase 3).
+Remaining phase: the samplers (phase 3). The Aeneas spike below decides how.
+
+### Phase 3 spike: Aeneas on the discrete Laplace sampler
+
+The question: can Charon and Aeneas turn OpenDP's sampler code (`traits/samplers`: `sample_discrete_laplace`
+and what it calls, down to `fill_bytes`) into Lean that a distribution proof can be built on?
+
+Setup: Charon `de8736f` (Aeneas's `charon-pin`) and Aeneas `main`, built next to this repository
+(`../charon`, `../aeneas`). Aeneas's Lean library pins Lean v4.35.0 and Mathlib v4.35.0, the same
+as `verification/lean`. Two local build problems, both fixed in the tools' setup rather than here:
+OCaml 5.3 configured against the Xcode 27 SDK enables `pipe2`/`dup3`, which macOS 26 lacks, so
+every OCaml program that opens a pipe crashes (configure with `ac_cv_func_pipe2=no
+ac_cv_func_dup3=no`); and zarith must link the arm64 GMP, not Homebrew's x86_64 one.
+
+Results:
+
+1. **On OpenDP's code as is, extraction runs but the model is useless for probability.** Charon
+   translates the whole call graph without errors. Aeneas translates everything except
+   `sample_geometric_exp_fast` (below). But `fill_bytes` calls `thread_rng()`, a global
+   source, so in Lean it is an opaque *deterministic* function, and `sample_standard_bernoulli`
+   becomes a constant: two "independent" coin flips are provably equal, and every rejection loop
+   either returns at once or never. Aeneas's monad is fixed (`Result`: success, failure,
+   divergence) and it no longer threads hidden state through opaque calls, so there is no way to
+   give `fill_bytes` a random meaning from the Lean side.
+2. **With the randomness source as a parameter, extraction is complete and type-checks.**
+   `aeneas-spike/rust/src/lib.rs` is OpenDP's code with `rng: &mut R` (`R: RandomSource`, whose
+   `fill_bytes` is OpenDP's) passed down, and one loop restructured. Aeneas then threads the
+   source's state through every call (`R → Result (... × R)`), and the output (about 600 lines,
+   plus axioms for the 35 `dashu` operations it uses) builds against Aeneas's library.
+   `aeneas-spike/extract.sh` reproduces it.
+3. **Aeneas rejects a loop with both a `break` and an early return when the code after it branches**
+   (here, the `?` in `while !sample_bernoulli_exp(..)? {..}` followed by more `?`s). Moving the code
+   after the loop into the accepting branch, so the loop only returns, is the same computation
+   and is accepted.
+4. **Proofs on the output work.** With a random tape as the state (`aeneas-spike/lean/Samplers/Tape.lean`),
+   `sample_standard_bernoulli_tape` (the extracted function returns the low bit of the next
+   byte and consumes one byte) is proved by `simp` alone. Loops are Aeneas's `loop`, a
+   `partial_fixpoint`, with an unfolding equation and fixpoint induction.
+
+What a full proof would still need on this route:
+- the change to OpenDP: an explicit randomness source in the samplers (e.g. generic inner functions,
+  with the public ones passing the system source), and the loop restructuring;
+- Lean models for the `dashu` operations, as definitions over `ℕ`/`ℤ`/`ℚ` (the same assumptions as
+  the Creusot `dashu` specifications), and lemmas relating big-endian bytes to numbers for the
+  uniform sampler;
+- **a probability layer that does not exist yet**: the uniform measure on tapes, a theorem that
+  programs consuming disjoint parts of the tape compose like independent draws, and, for each
+  rejection loop, that it terminates with probability 1 and has the expected output distribution
+  (from the `partial_fixpoint` unfolding, as a countable union over iteration counts);
+- the CKS20 distribution arguments, carried out on the extracted code.
+
+The alternative: [SampCert](https://github.com/leanprover/SampCert) (Lean v4.34.1, Mathlib
+v4.34.1) has `DiscreteLaplaceSampleOptimized`, which follows the same CKS20 algorithm
+(uniform remainder accepted by a Bernoulli(exp) draw, geometric quotient, division, sign with
+`-0` rejected), in its probability monad `SLang` (`probUntil`, `probWhile`), with proofs that it
+has the discrete Laplace mass. Transcribing OpenDP's samplers (about 100 lines of Rust) into
+`SLang` would reuse that monad and most of those proofs. What it gives up is a mechanical link:
+the transcription is checked by review.
+
+**Recommendation: transcribe into SampCert's `SLang` and reuse its proofs; keep the Aeneas extraction
+as a cross-check of the transcription's control flow.** The Aeneas route's mechanical link is
+real, but it needs a source change to OpenDP and a probability layer for tapes and loops that
+would be built from scratch, and the code it links is short enough to review line by line. The
+first step on the SampCert route is porting SampCert to Lean v4.35 (one minor version).
