@@ -10,7 +10,7 @@
 //! The facts about them are assumptions, listed in `verification/TRUST.md`:
 //! - the theorems of differential privacy that OpenDP's proofs cite: chaining a valid transformation
 //!   into a valid measurement, and post-processing (contracts of `make_chain_mt`, `make_chain_pm`);
-//! - the mechanism theorems (e.g. `laplace_mechanism`);
+//! - the mechanism theorems (`laplace_mechanism`, proved in Lean);
 //! - the definitions of the metrics, for the transformations proved stable here (`t_valid_*`).
 use creusot_std::prelude::*;
 use dashu::integer::IBig;

@@ -1,8 +1,8 @@
 //! Verification of the discrete Laplace privacy map.
 //!
 //! The map returns `d_in / scale`, rounded up to `f64`, with `0` at `d_in = 0` and infinity when
-//! `scale = 0`. That this bounds the privacy loss is the discrete Laplace mechanism theorem, which
-//! is cited (`laplace_mechanism`).
+//! `scale = 0`. That this bounds the privacy loss is the discrete Laplace mechanism theorem
+//! (`laplace_mechanism`), proved in Lean.
 use creusot_std::{logic::real::Real, prelude::*};
 use dashu::rational::RBig;
 
@@ -35,11 +35,12 @@ pub fn laplace_bound(d: Real, s: Real, o: f64) -> bool {
 /// The discrete Laplace mechanism: a privacy map bounding the privacy loss as in `laplace_bound`
 /// meets the Proof Definition of `NoisePrivacyMap` for `ZExpFamily<1>`.
 ///
-/// Trusted (cited, Kind C): for integer vectors `x`, `x'` with `||x - x'||_1 <= d`, adding
-/// independent discrete Laplace noise with scale `s > 0` to each coordinate gives outputs within
-/// max-divergence `d / s` (Ghosh, Roughgarden and Sundararajan 2012; Canonne, Kamath and Steinke
-/// 2020, as cited by OpenDP's `NoisePrivacyMap_for_ZExpFamily1`). For `d = 0` the inputs are equal,
-/// so the divergence is 0; an infinite bound always holds.
+/// Trusted here, proved in Lean (`OpenDP.Laplace.laplace_mechanism` in
+/// `verification/lean/OpenDPVerification/Laplace.lean`): for integer vectors `x`, `x'` of the same
+/// length with `||x - x'||_1 <= d`, adding independent discrete Laplace noise with scale `s` to
+/// each coordinate gives outputs within max-divergence `o`. `LaplaceBound` there is
+/// `laplace_bound`, with a finite `o` read as its value and `+inf` as no bound. The `f64` outputs
+/// of the map are finite or `+inf`: they are `0`, `+inf`, or `d / s` rounded up.
 #[trusted]
 #[logic(opaque)]
 #[requires(rv.scale.deep_model() >= Real::from_int(0))]

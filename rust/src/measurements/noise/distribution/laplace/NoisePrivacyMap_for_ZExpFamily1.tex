@@ -64,7 +64,7 @@ None
             &&\text{substitute } \rustdoc{measures/struct}{MaxDivergence} \\
         &\leq\max_{x \sim x'} \max_{y \in \mathbb{Z}^d} \Big[\ln \dfrac{\Pr[M(x) = y]}{\Pr[M(x') = y]} \Big] 
             &&\text{mass is upper-bounded by point densities}\\
-        &=\max_{x \sim x'} \max_{y \in \mathbb{Z}^d} \ln \dfrac{\prod_{i=1}^d \frac{e^{-1/s} - 1}{e^{-1/s} + 1} e^{-|x_i - z_i|/s}}{\prod_{i=1}^d\frac{e^{-1/s} - 1}{e^{-1/s} + 1} e^{-|x'_i-z_i|/s}}
+        &=\max_{x \sim x'} \max_{y \in \mathbb{Z}^d} \ln \dfrac{\prod_{i=1}^d \frac{1 - e^{-1/s}}{1 + e^{-1/s}} e^{-|x_i - z_i|/s}}{\prod_{i=1}^d\frac{1 - e^{-1/s}}{1 + e^{-1/s}} e^{-|x'_i-z_i|/s}}
             &&\text{substitute pdf}\\
         &=\max_{x \sim x'} \max_{y \in \mathbb{Z}^d} \ln \prod_{i=1}^d e^{\frac{|x'_i - z_i| - |x_i - z_i|}{s}}
             &&\text{cancel constants} \\

@@ -407,13 +407,14 @@ Code changes:
 - `traits::operations` is no longer a trusted module. Items in it outside the scope are trusted
   individually.
 
-## Status: `make_laplace` (phase 1: deterministic code)
+## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 
 Verified, for every atom type (floats and integers, scalar and vector inputs): `make_laplace`
 returns valid measurements under `P = 1` (`noise_claim`), and for `f64` vectors and scalars and
 `i32` vectors, valid measurements (`make_laplace_*_valid`), given the assumptions listed in
 `TRUST.md`:
-- the discrete Laplace mechanism theorem (cited);
+- the discrete Laplace mechanism theorem: proved in Lean (phase 2, below); what is trusted is
+  that the Lean statement matches the Creusot axiom `laplace_mechanism` (`TRUST.md`);
 - chaining and post-processing (cited);
 - the definitions of the metrics;
 - **the samplers draw the distributions they claim (not verified: phase 3)**.
@@ -463,4 +464,30 @@ Code changes (behavior unchanged):
   function (`noise_function`), instead of cloning it.
 - `AtomDomain` and `VectorDomain` have hand-written `Clone` impls (the same as the derived ones).
 
-Remaining phases: the mechanism theorem in Lean (phase 2), and the samplers (phase 3).
+### The discrete Laplace mechanism (Lean, phase 2)
+
+Proved (`verification/lean/OpenDPVerification/Laplace.lean`, `laplace_mechanism`): if integer
+vectors `x`, `x'` of the same length are within L1 distance `d`, and the privacy map's output `o`
+satisfies `LaplaceBound d s o` (the Creusot `laplace_bound`: `0` at `d = 0`, at least `d / s` when
+`s > 0`, or `+inf`), then `x + Z` and `x' + Z`, with `Z` independent discrete Laplace samples of
+scale `s`, satisfy `Pr[x + Z ∈ S] <= e^o Pr[x' + Z ∈ S]` for every set `S`. This is the Proof
+Definition of `NoisePrivacyMap` for `ZExpFamily<1>` with `MaxDivergence`, which the Creusot proof
+assumed as `laplace_mechanism`.
+
+- `discreteLaplace s`: mass `(1 - e^{-1/s}) / (1 + e^{-1/s}) e^{-|z|/s}`, proved to sum to 1
+  (two geometric series), or the point mass at 0 when `s = 0`.
+- `iid p n`: the product mass `prod_i p(v_i)`, proved to sum to 1; `addNoise p x` is its
+  translate by `x`.
+- The proof follows OpenDP's `NoisePrivacyMap_for_ZExpFamily1`: the pointwise ratio of masses is
+  at most `e^{sum_i |x_i - x'_i| / s}` (reverse triangle inequality per coordinate), and a
+  pointwise bound gives the set-wise one by summing. At `d = 0` the inputs are equal.
+
+Mutation check: weakening `LaplaceBound` to `o >= d / (2 s)` makes the proof fail.
+
+Only Lean's standard axioms are used (`#print axioms`: `propext`, `Classical.choice`,
+`Quot.sound`).
+
+OpenDP's documentation gave the normalizing constant as `(e^{-1/s} - 1) / (e^{-1/s} + 1)`,
+which is negative (`FINDINGS.md` D5); it is corrected on the branch.
+
+Remaining phase: the samplers (phase 3).

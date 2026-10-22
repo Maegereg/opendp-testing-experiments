@@ -183,6 +183,20 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   `Err` unless the computed `1 - uk` is positive. With both changes the Proof Definitions alone
   suffice.
 
+### D5. The discrete Laplace mass is documented with the wrong sign
+
+- **Where:** the Proof Definition of `ZExpFamily` (`rust/src/measurements/noise/mod.rs`), the
+  docs of `sample_discrete_laplace` (`traits/samplers/cks20/mod.rs`) and of
+  `conservative_discrete_laplacian_tail_to_alpha` (`accuracy/tail_bounds/mod.rs`), and the proof
+  `NoisePrivacyMap_for_ZExpFamily1.tex`.
+- **What:** The mass is given as `(e^{-1/s} - 1) / (e^{-1/s} + 1) e^{-|x|/s}`, which is negative
+  for every `s > 0`. The correct constant is `(1 - e^{-1/s}) / (1 + e^{-1/s})`, as in
+  `sample_discrete_laplace.tex` and `discrete_laplacian_scale_to_accuracy.tex`; the Lean proof
+  checks that it sums to 1.
+- **Why it is still sound:** the constant cancels in the privacy proof, and the sampler's proof
+  uses the correct one. Only the documented definition is wrong.
+- **Fix (on the branch):** the four occurrences are corrected.
+
 ## Tool limitations (Creusot v0.14.0)
 
 | Limitation | Workaround |
