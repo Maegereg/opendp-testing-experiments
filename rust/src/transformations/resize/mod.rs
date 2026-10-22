@@ -101,8 +101,9 @@ fn resize_vec<TA: CheckAtom, MI: IsMetricOrdered, MO: IsMetricOrdered>(
     Ok(match arg.len().cmp(&size) {
         Ordering::Less | Ordering::Equal => {
             let mut data = pad(arg, size, constant);
-            // if output metric is ordered, then shuffle the imputed values into the data
-            if MO::ORDERED {
+            // if output metric is ordered and input metric is not, then shuffle the imputed values into the data.
+            // (If both are ordered, the order of the data is preserved, as it is when truncating.)
+            if MO::ORDERED && !MI::ORDERED {
                 #[cfg(creusot)]
                 let before = snapshot!(data);
                 data.shuffle()?;

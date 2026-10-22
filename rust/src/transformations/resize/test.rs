@@ -32,10 +32,9 @@ fn insert_delete_distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
 }
 
 /// FINDINGS.md F4: under `InsertDeleteDistance` to `InsertDeleteDistance`, a dataset of exactly
-/// `size` rows is shuffled while its neighbour with one more row is truncated without a shuffle,
-/// so the outputs can be at distance 4 > `map(1)` = 2 (`resize_id_id_unstable` in `proof.rs`).
+/// `size` rows used to be shuffled while its neighbour with one more row was truncated without a
+/// shuffle, so the outputs could be at distance 4 > `map(1)` = 2.
 #[test]
-#[ignore = "F4: make_resize is not stable from InsertDeleteDistance to InsertDeleteDistance"]
 fn test_insert_delete_boundary_stability() -> Fallible<()> {
     let trans = make_resize::<_, InsertDeleteDistance, InsertDeleteDistance>(
         VectorDomain::new(AtomDomain::default()),
@@ -55,5 +54,20 @@ fn test_insert_delete_boundary_stability() -> Fallible<()> {
             "{fx:?} and {fy:?} are farther apart than {d_out}"
         );
     }
+    Ok(())
+}
+
+/// From `InsertDeleteDistance` to `InsertDeleteDistance` the order of the rows is kept.
+#[test]
+fn test_insert_delete_keeps_order() -> Fallible<()> {
+    let trans = make_resize::<_, InsertDeleteDistance, InsertDeleteDistance>(
+        VectorDomain::new(AtomDomain::default()),
+        InsertDeleteDistance,
+        4,
+        0i32,
+    )?;
+    assert_eq!(trans.invoke(&vec![3, 1, 2])?, vec![3, 1, 2, 0]);
+    assert_eq!(trans.invoke(&vec![3, 1, 2, 5])?, vec![3, 1, 2, 5]);
+    assert_eq!(trans.invoke(&vec![3, 1, 2, 5, 4])?, vec![3, 1, 2, 5]);
     Ok(())
 }

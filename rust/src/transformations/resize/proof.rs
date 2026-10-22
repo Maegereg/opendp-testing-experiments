@@ -1,15 +1,16 @@
 //! Verification of `make_resize`.
 //!
 //! The function pads datasets shorter than `size` with `constant`, and truncates longer ones to
-//! their first `size` rows. Depending on the metrics it shuffles: the padded dataset when the
-//! output metric is ordered, and the dataset before truncating when the input metric is not
-//! ordered. Its outputs on `x` are therefore a set of datasets (`resized`), all of them possible.
+//! their first `size` rows. When the input metric is unordered it shuffles, before padding or
+//! truncating (the padded dataset only if the output metric is ordered). Its outputs on `x` are
+//! therefore a set of datasets (`resized`), all of them possible.
 //!
-//! The function is random, so stability is a coupling: for neighbouring `x` and `y`, the output
-//! distributions must be matched so that matched outputs are within the map. A necessary condition
-//! is that every possible output of `x` has a possible output of `y` within the map
-//! (`resize_matched`, for every ordered pair). Where both sides shuffle, the matchings constructed
-//! here are those of a coupling of the two shuffles (cited, as for `make_ordered_random`).
+//! The function may be random, so stability is a coupling: for neighbouring `x` and `y`, the
+//! output distributions must be matched so that matched outputs are within the map. A necessary
+//! condition is that every possible output of `x` has a possible output of `y` within the map, for
+//! every ordered pair (`resize_*_stable`). Where one side is deterministic, this is the coupling.
+//! Where both sides shuffle, that the matchings constructed here extend to a coupling of the two
+//! shuffles is assumed (`TRUST.md`).
 use creusot_std::{
     logic::{Int, such_that},
     prelude::*,
@@ -90,7 +91,7 @@ pub fn resized<T>(
     pearlite! {
         if x.len() <= size {
             let p = x.concat(rep(constant, size - x.len()));
-            if mo_ordered { same(y, p) && y.len() == p.len() } else { y == p }
+            if mo_ordered && !mi_ordered { same(y, p) && y.len() == p.len() } else { y == p }
         } else if mi_ordered {
             y == x.subsequence(0, size)
         } else {
@@ -120,7 +121,7 @@ pub fn resize_out<T>(
     pearlite! {
         if x.len() <= size {
             let p = padded(x, size, constant);
-            if mo_ordered {
+            if mo_ordered && !mi_ordered {
                 exists<v: Vec<T>, w: Vec<T>> v@ == p && v.reorders(w) && w@ == y
             } else {
                 y == p
@@ -870,141 +871,141 @@ pub fn match_id_sym<T>(x: Seq<T>, y: Seq<T>, d: Int, s: Int, k: T, fx: Seq<T>) -
     }
 }
 
-/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance`, except when `x` is
-/// padded and `y` truncated: every output `fx` of `x` is matched with an output of `y` within
-/// insert-delete distance `2 d`. (The excluded case is `id_id_unstable`.)
+/// Appending the same elements to a sequence and to its subsequence.
+#[logic]
+#[requires(sub(z, x, dx))]
+#[ensures(sub(z.concat(w), x.concat(w), dx))]
+#[variant(w.len())]
+pub fn sub_append_common<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>, w: Seq<T>) {
+    pearlite! {
+        if w.len() > 0 {
+            let wi = w.subsequence(0, w.len() - 1);
+            sub_append_common(z, x, dx, wi);
+            proof_assert!(z.concat(w).subsequence(0, z.len() + wi.len()).ext_eq(z.concat(wi)));
+            proof_assert!(x.concat(w).subsequence(0, x.len() + wi.len()).ext_eq(x.concat(wi)));
+        } else {
+            proof_assert!(z.concat(w).ext_eq(z) && x.concat(w).ext_eq(x));
+        }
+    }
+}
+
+/// Appending elements to a sequence, as deletions.
+#[logic]
+#[requires(sub(z, x, dx))]
+#[ensures(sub(z, x.concat(v), dx.concat(v)))]
+#[variant(v.len())]
+pub fn sub_append_del<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>, v: Seq<T>) {
+    pearlite! {
+        if v.len() > 0 {
+            let vi = v.subsequence(0, v.len() - 1);
+            sub_append_del(z, x, dx, vi);
+            proof_assert!(x.concat(v).subsequence(0, x.len() + vi.len()).ext_eq(x.concat(vi)));
+            proof_assert!(dx.concat(v).subsequence(0, dx.len() + vi.len()).ext_eq(dx.concat(vi)));
+        } else {
+            proof_assert!(x.concat(v).ext_eq(x) && dx.concat(v).ext_eq(dx));
+        }
+    }
+}
+
+/// Insert-delete closeness is symmetric.
+#[logic]
+#[requires(id_close(x, y, d))]
+#[ensures(result && id_close(y, x, d))]
+pub fn id_swap<T>(x: Seq<T>, y: Seq<T>, d: Int) -> bool {
+    pearlite! {
+        let (z, dx, dy) = id_witness(x, y, d);
+        true
+    }
+}
+
+/// Padding both datasets at the end: the shared padding extends the common subsequence, and the
+/// rest is deleted, `max(|dx|, |dy|)` elements on each side.
+#[logic]
+#[requires(sub(z, x, dx) && sub(z, y, dy) && x.len() <= s && y.len() <= s)]
+#[ensures(result && id_close(padded(x, s, k), padded(y, s, k), 2 * (dx.len() + dy.len())))]
+pub fn id_pad_pad<T>(
+    z: Seq<T>,
+    x: Seq<T>,
+    dx: Seq<T>,
+    y: Seq<T>,
+    dy: Seq<T>,
+    s: Int,
+    k: T,
+) -> bool {
+    pearlite! {
+        sub_same(z, x, dx);
+        sub_same(z, y, dy);
+        let k1 = s - x.len();
+        let k2 = s - y.len();
+        let m = if k1 <= k2 { k1 } else { k2 };
+        count_rep(k, m);
+        count_rep(k, k1 - m);
+        count_rep(k, k2 - m);
+        rep_concat(k, m, k1 - m);
+        rep_concat(k, m, k2 - m);
+        let zm = z.concat(rep(k, m));
+        sub_append_common(z, x, dx, rep(k, m));
+        sub_append_common(z, y, dy, rep(k, m));
+        sub_append_del(zm, x.concat(rep(k, m)), dx, rep(k, k1 - m));
+        sub_append_del(zm, y.concat(rep(k, m)), dy, rep(k, k2 - m));
+        proof_assert!(x.concat(rep(k, m)).concat(rep(k, k1 - m)).ext_eq(padded(x, s, k)));
+        proof_assert!(y.concat(rep(k, m)).concat(rep(k, k2 - m)).ext_eq(padded(y, s, k)));
+        true
+    }
+}
+
+/// Padding `x` and truncating `y` to `s` rows: a prefix of the common subsequence remains, with
+/// at most `|dy|` deletions on each side.
+#[logic]
+#[requires(sub(z, x, dx) && sub(z, y, dy) && x.len() <= s && s <= y.len())]
+#[ensures(result && id_close(padded(x, s, k), y.subsequence(0, s), 2 * dy.len()))]
+pub fn id_pad_trunc<T>(
+    z: Seq<T>,
+    x: Seq<T>,
+    dx: Seq<T>,
+    y: Seq<T>,
+    dy: Seq<T>,
+    s: Int,
+    k: T,
+) -> bool {
+    pearlite! {
+        sub_same(z, x, dx);
+        sub_same(z, y, dy);
+        let (j, ey) = sub_prefix(z, y, dy, s);
+        let e1 = sub_drop(z, x, dx, j);
+        count_rep(k, s - x.len());
+        sub_append_del(z.subsequence(0, j), x, e1, rep(k, s - x.len()));
+        proof_assert!(e1.concat(rep(k, s - x.len())).len() == s - j);
+        true
+    }
+}
+
+/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance`: the function is
+/// deterministic, and the outputs of `x` and `y` are within insert-delete distance `2 d`.
 #[logic]
 #[requires(id_close(x, y, d) && 0 <= s)]
-#[requires(!(x.len() <= s && s < y.len()))]
 #[requires(resized(true, true, x, s, k, fx))]
 #[ensures(resized(true, true, y, s, k, result) && id_close(fx, result, 2 * d))]
 pub fn match_id_id<T>(x: Seq<T>, y: Seq<T>, d: Int, s: Int, k: T, fx: Seq<T>) -> Seq<T> {
     pearlite! {
         let (z, dx, dy) = id_witness(x, y, d);
-        id_sym(z, x, dx, y, dy);
-        if x.len() <= s {
-            proof_assert!(y.len() <= s);
-            proof_assert!(same(fx, padded(x, s, k)));
-            let (c2, a2, b2) = match_pad_pad(x, y, z, dx, dy, s, k);
-            proof_assert!(same(fx, c2.concat(a2)));
-            let q = reorder(fx, c2, a2, b2);
-            same_len(padded(y, s, k), c2.concat(b2));
-            hamming_id(fx, q, a2.len());
-            id_mono(fx, q, 2 * a2.len(), 2 * d);
-            q
+        if x.len() <= s && y.len() <= s {
+            id_pad_pad(z, x, dx, y, dy, s, k);
+            id_mono(fx, padded(y, s, k), 2 * (dx.len() + dy.len()), 2 * d);
+            padded(y, s, k)
+        } else if x.len() <= s {
+            id_pad_trunc(z, x, dx, y, dy, s, k);
+            id_mono(fx, y.subsequence(0, s), 2 * dy.len(), 2 * d);
+            y.subsequence(0, s)
         } else if y.len() <= s {
-            let (c, a, b) = match_id_pad_trunc(z, y, dy, x, dx, s, k);
-            let q = reorder(fx, c, b, a);
-            same_len(padded(y, s, k), c.concat(a));
-            hamming_id(fx, q, b.len());
-            id_mono(fx, q, 2 * b.len(), 2 * d);
-            q
+            id_pad_trunc(z, y, dy, x, dx, s, k);
+            id_swap(padded(y, s, k), fx, 2 * dx.len());
+            id_mono(fx, padded(y, s, k), 2 * dx.len(), 2 * d);
+            padded(y, s, k)
         } else {
             id_prefix(x, y, d, s);
             y.subsequence(0, s)
         }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// `InsertDeleteDistance` to `InsertDeleteDistance` is not stable
-// ---------------------------------------------------------------------------------------------
-
-/// A sequence is a subsequence of itself.
-#[logic]
-#[ensures(sub(x, x, Seq::empty()))]
-#[variant(x.len())]
-pub fn sub_refl<T>(x: Seq<T>) {
-    pearlite! { if x.len() > 0 { sub_refl(x.subsequence(0, x.len() - 1)) } }
-}
-
-/// The last element of a subsequence occurs in the sequence.
-#[logic]
-#[requires(sub(z, x, dx) && z.len() >= 1)]
-#[ensures(exists<i> 0 <= i && i < x.len() && x[i] == z[z.len() - 1])]
-#[variant(x.len())]
-pub fn sub_last<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>) {
-    pearlite! {
-        let xi = x.subsequence(0, x.len() - 1);
-        if dx.len() > 0 && dx[dx.len() - 1] == x[x.len() - 1]
-            && sub(z, xi, dx.subsequence(0, dx.len() - 1)) {
-            sub_last(z, xi, dx.subsequence(0, dx.len() - 1))
-        }
-    }
-}
-
-/// The last two elements of a subsequence occur in the sequence, in the same order.
-#[logic]
-#[requires(sub(z, x, dx) && z.len() >= 2)]
-#[ensures(exists<i, j> 0 <= i && i < j && j < x.len()
-    && x[i] == z[z.len() - 2] && x[j] == z[z.len() - 1])]
-#[variant(x.len())]
-pub fn sub_last2<T>(z: Seq<T>, x: Seq<T>, dx: Seq<T>) {
-    pearlite! {
-        let xi = x.subsequence(0, x.len() - 1);
-        if dx.len() > 0 && dx[dx.len() - 1] == x[x.len() - 1]
-            && sub(z, xi, dx.subsequence(0, dx.len() - 1)) {
-            sub_last2(z, xi, dx.subsequence(0, dx.len() - 1))
-        } else {
-            sub_last(z.subsequence(0, z.len() - 1), xi, dx)
-        }
-    }
-}
-
-/// The sequence `[a, b, c]`.
-#[logic(open)]
-pub fn seq3<T>(a: T, b: T, c: T) -> Seq<T> {
-    pearlite! { Seq::empty().push_back(a).push_back(b).push_back(c) }
-}
-
-/// With distinct `a`, `b`, `c`, the sequences `[c, b, a]` and `[a, b, c]` have no common
-/// subsequence of two elements, so they are not within insert-delete distance 3.
-#[logic]
-#[requires(a != b && b != c && a != c)]
-#[ensures(!id_close(seq3(c, b, a), seq3(a, b, c), 3))]
-pub fn reversed_far<T>(a: T, b: T, c: T) {
-    pearlite! {
-        let p = seq3(c, b, a);
-        let q = seq3(a, b, c);
-        if id_close(p, q, 3) {
-            let (z, dp, dq) = id_witness(p, q, 3);
-            sub_same(z, p, dp);
-            sub_same(z, q, dq);
-            proof_assert!(z.len() >= 2);
-            sub_last2(z, p, dp);
-            sub_last2(z, q, dq);
-        }
-    }
-}
-
-/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance` with `size = 3` is not
-/// stable: `x = [a, b, c]` and `y = [a, b, c, a]` are within insert-delete distance 1, `x` (padded
-/// with no rows, then shuffled) may be resized to `[c, b, a]`, but `y` (truncated, not shuffled)
-/// is always resized to `[a, b, c]`, at insert-delete distance 4 > 2 = `map(1)`. As the shuffle is
-/// uniform, `[c, b, a]` has probability 1/6, so no coupling of the outputs is within `map(1)`.
-#[logic]
-#[requires(a != b && b != c && a != c)]
-#[ensures(id_close(seq3(a, b, c), seq3(a, b, c).push_back(a), 1))]
-#[ensures(resized(true, true, seq3(a, b, c), 3, k, seq3(c, b, a)))]
-#[ensures(forall<fy: Seq<T>> resized(true, true, seq3(a, b, c).push_back(a), 3, k, fy) ==>
-    !id_close(seq3(c, b, a), fy, 3))]
-pub fn id_id_unstable<T>(a: T, b: T, c: T, k: T) {
-    pearlite! {
-        let x = seq3(a, b, c);
-        let y = x.push_back(a);
-        sub_refl(x);
-        proof_assert!(Seq::<T>::empty().push_back(a).subsequence(0, 0).ext_eq(Seq::empty()));
-        proof_assert!(y.subsequence(0, 3).ext_eq(x));
-        proof_assert!(sub(x, y, Seq::empty().push_back(a)));
-        proof_assert!(rep(k, 0).ext_eq(Seq::empty()) && x.concat(rep(k, 0)).ext_eq(x));
-        count_push(Seq::empty().push_back(a), b);
-        count_push(Seq::empty().push_back(a).push_back(b), c);
-        count_push(Seq::empty().push_back(c), b);
-        count_push(Seq::empty().push_back(c).push_back(b), a);
-        count_push(Seq::empty(), a);
-        count_push(Seq::empty(), c);
-        proof_assert!(same(seq3(c, b, a), x));
-        reversed_far(a, b, c);
     }
 }
 
@@ -1090,18 +1091,15 @@ pub fn resize_id_sym_stable<TA: CheckAtom>(
     }
 }
 
-/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance` is stable on every pair
-/// of datasets except a padded `x` (at most `size` rows) and a truncated `y` (more than `size`
-/// rows), where it is not (`resize_id_id_unstable`).
+/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance` is stable.
 #[logic(prophetic)]
 #[requires(resize_contract(t, input_domain, size, constant))]
 #[requires(<InsertDeleteDistance as EventModel>::close(x@, y@, d@))]
-#[requires(!(x@.len() <= size@ && size@ < y@.len()))]
 #[requires(t.function.post()[x][Ok(fx)] && t.stability_map.post()[d][Ok(o)])]
 #[ensures(resized(<InsertDeleteDistance as IsMetricOrdered>::ORDERED, <InsertDeleteDistance as IsMetricOrdered>::ORDERED,
     y@, size@, constant, result))]
 #[ensures(<InsertDeleteDistance as EventModel>::close(fx@, result, o@))]
-pub fn resize_id_id_stable_except<TA: CheckAtom>(
+pub fn resize_id_id_stable<TA: CheckAtom>(
     t: Resize<TA, InsertDeleteDistance, InsertDeleteDistance>,
     input_domain: VectorDomain<AtomDomain<TA>>,
     size: usize,
@@ -1117,22 +1115,5 @@ pub fn resize_id_id_stable_except<TA: CheckAtom>(
         let fy = match_id_id(x@, y@, d@, size@, constant, fx@);
         id_mono(fx@, fy, 2 * d@, o@);
         fy
-    }
-}
-
-/// `make_resize` from `InsertDeleteDistance` to `InsertDeleteDistance` is not stable (with
-/// `size = 3` and a map of at most 3 at `d_in = 1`; the map returns 2): see `id_id_unstable`.
-#[logic]
-#[requires(a != b && b != c && a != c && o <= 3)]
-#[ensures(<InsertDeleteDistance as EventModel>::close(seq3(a, b, c), seq3(a, b, c).push_back(a), 1))]
-#[ensures(resized(<InsertDeleteDistance as IsMetricOrdered>::ORDERED, <InsertDeleteDistance as IsMetricOrdered>::ORDERED,
-    seq3(a, b, c), 3, k, seq3(c, b, a)))]
-#[ensures(forall<fy: Seq<T>> resized(<InsertDeleteDistance as IsMetricOrdered>::ORDERED,
-    <InsertDeleteDistance as IsMetricOrdered>::ORDERED, seq3(a, b, c).push_back(a), 3, k, fy) ==>
-    !<InsertDeleteDistance as EventModel>::close(seq3(c, b, a), fy, o))]
-pub fn resize_id_id_unstable<T>(a: T, b: T, c: T, k: T, o: Int) {
-    pearlite! {
-        id_id_unstable(a, b, c, k);
-        proof_assert!(forall<fy: Seq<T>> id_close(seq3(c, b, a), fy, o) ==> id_close(seq3(c, b, a), fy, 3));
     }
 }

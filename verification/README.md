@@ -410,14 +410,14 @@ Code changes:
 ## Status: `make_resize`
 
 Verified (`rust/src/transformations/resize/proof.rs`) for every atom type `TA` and each of the
-four metric pairs, except where it is not stable (F4, `FINDINGS.md`).
+four metric pairs, after fixing F4 (`FINDINGS.md`).
 
 1. **The constructor meets its contract** (`resize_contract`). On success:
    - `size > 0`.
    - The output domain is the input's element domain with `size` rows.
    - The function can be evaluated on any dataset. Its output on `x` is described by `resize_out`:
      - if `x` has at most `size` rows, `x` padded with `constant`, shuffled when the output metric
-       is ordered;
+       is ordered and the input metric is not;
      - otherwise the first `size` rows of `x`, shuffled first when the input metric is unordered.
    - The stability map returns at least `2 d_in`.
 2. **The possible outputs.** A shuffle is uniform (`Shuffle`'s Proof Definition), so the support of
@@ -429,11 +429,8 @@ four metric pairs, except where it is not stable (F4, `FINDINGS.md`).
    - `SymmetricDistance` to `SymmetricDistance`: `resize_sym_sym_stable`;
    - `SymmetricDistance` to `InsertDeleteDistance`: `resize_sym_id_stable`;
    - `InsertDeleteDistance` to `SymmetricDistance`: `resize_id_sym_stable`;
-   - `InsertDeleteDistance` to `InsertDeleteDistance`: `resize_id_id_stable_except`, for every
-     pair except a padded `x` (at most `size` rows) and a truncated `y` (more rows).
-     **For that case `resize_id_id_unstable` proves the opposite**: with distinct `a`, `b`, `c`
-     and `size = 3`, `[a, b, c]` and `[a, b, c, a]` are within distance 1, the first may be resized
-     to `[c, b, a]`, and every output of the second, `[a, b, c]`, is at distance more than 3.
+   - `InsertDeleteDistance` to `InsertDeleteDistance`: `resize_id_id_stable`. The function is
+     deterministic, so this is stability.
 
    Where one side is deterministic, the matching is the coupling. Where both are shuffled, that the
    matching extends to a coupling of the uniform shuffles is assumed (`TRUST.md`).
@@ -444,13 +441,19 @@ The matchings are built from decompositions of the datasets into a common part a
   `match_trunc_trunc`, `match_trunc_pad`, `match_pad_trunc`);
 - under the insert-delete distance, prefixes of `x` and `y` keep a prefix of their common
   subsequence (`sub_prefix`, `sub_drop`), so the first `size` rows of datasets within `d` are within
-  `2 d` (`id_prefix`, `match_id_pad_trunc`);
+  `2 d` (`id_prefix`, `match_id_pad_trunc`, `id_pad_trunc`), and padding at the end extends the
+  common subsequence (`id_pad_pad`);
 - for an ordered output, `reorder` orders the rows of `y`'s output like the matching rows of
   `x`'s output, so that they differ in at most `|a|` positions, and hence are within insert-delete
   distance `2 |a|` (`hamming_id`).
 
-Found: F4 (`FINDINGS.md`), confirmed by `resize_id_id_unstable` and by the ignored test
-`test_insert_delete_boundary_stability`. Not fixed.
+Found and fixed: F4 (`FINDINGS.md`). From `InsertDeleteDistance` to `InsertDeleteDistance`, a
+dataset of exactly `size` rows was shuffled while its neighbour with one more row was truncated
+without a shuffle, so the transformation was not stable. Before the fix this was proved
+(`resize_id_id_unstable`, commit `2e2cc8a4`): with distinct `a`, `b`, `c` and `size = 3`, `[a, b, c]`
+and `[a, b, c, a]` are within distance 1, the first could be resized to `[c, b, a]`, and the only
+output of the second, `[a, b, c]`, is at distance 4 > `map(1)` = 2. The padded dataset is now
+shuffled only when the input metric is unordered and the output metric ordered.
 
 Also strengthened: `Shuffle::reorders` is now uninterpreted, implying a permutation but not
 equivalent to one. Before, the identity counted as a shuffle, so removing `data.shuffle()` from
@@ -461,12 +464,15 @@ Trusted: `atom_clone`, `perm_same`, the coupling of matchings where both sides s
 
 Mutation checks: each of the following makes verification fail:
 - removing the shuffle of padded datasets, or of datasets before truncating;
-- shuffling padded datasets when the input metric (instead of the output metric) is ordered;
+- reverting the fix of F4 (shuffling padded datasets whenever the output metric is ordered);
 - truncating to `size - 1` rows;
 - a stability map of `d_in` instead of `2 d_in`;
 - removing the shuffle from `make_ordered_random`.
 
-Code changes (behavior unchanged):
+Code changes:
+- F4: the padded dataset is shuffled only when the output metric is ordered and the input metric
+  is not. This changes behavior only from `InsertDeleteDistance` to `InsertDeleteDistance`, where
+  the order of the rows is now kept.
 - The function's closure calls `resize_vec`, and the padding is built by `pad`, an indexed loop,
   instead of an iterator chain.
 - `IsMetricOrdered` requires `MaybeEventModel` (empty outside Creusot).

@@ -134,22 +134,21 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   deterministic, no coupling of the outputs is within `map(1)`. In general the distance between a
   random ordering of `x` and `x` itself approaches `2 size` as `size` grows.
 - **How found:** Reading the code to plan its proof, then confirmed by proof and by running it.
-  The proof of `make_resize` (`transformations/resize/proof.rs`) shows the other three metric
-  pairs stable, and `InsertDeleteDistance` to `InsertDeleteDistance` stable on every pair of
-  datasets except a padded `x` and a truncated `y`. For that case `resize_id_id_unstable` proves
-  the counterexample above, for any three distinct values. The ignored test
-  `test_insert_delete_boundary_stability` reproduces it.
+  The proof of the unchanged code (commit `2e2cc8a4`) showed the other three metric pairs stable,
+  and `InsertDeleteDistance` to `InsertDeleteDistance` stable on every pair of datasets except a
+  padded `x` and a truncated `y`. For that case `resize_id_id_unstable` proved the counterexample
+  above, for any three distinct values.
 - **Impact:** The transformation's stability claim is false. A downstream computation that depends
   on the order of the rows, calibrated to `map(d_in)` under `InsertDeleteDistance`, gets a privacy
   guarantee weaker than stated. Order-insensitive computations (counts, integer sums) are not
   affected, because the output multisets are the same.
 - **Fix:** Shuffle the padded dataset only when the output metric is ordered and the input metric
   is not (`MO::ORDERED && !MI::ORDERED`). Under `InsertDeleteDistance` on both sides the function
-  then pads at the end and truncates to a prefix, deterministically. That is stable with
-  `map(d) = 2 d`: the padded-and-truncated case follows from `match_id_pad_trunc` and `reorder`'s
-  identity case, as in `match_id_sym`. This changes behavior only for `InsertDeleteDistance` to
-  `InsertDeleteDistance`.
-- **Status:** Not fixed (left as is to confirm by proof first).
+  then pads at the end and truncates to a prefix, deterministically. This changes behavior only
+  for `InsertDeleteDistance` to `InsertDeleteDistance`.
+- **Status:** Fixed on this branch as above. All four metric pairs are proved stable with
+  `map(d) = 2 d` (`resize_id_id_stable` for this one). `test_insert_delete_boundary_stability`
+  (the counterexample, which failed before the fix) and `test_insert_delete_keeps_order` check it.
 
 ## Fragile derivations
 
