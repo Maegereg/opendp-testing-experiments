@@ -14,6 +14,12 @@ needs `δ ≥ Pr[Z ≥ T - v]`.
 * F8: the input metric treats an absent key as the value 0, so `{k: 0}` and `{}` are at distance 0,
   and the map returns `δ = 0`; but `{k: 0}` releases `k` with probability `Pr[Z ≥ T] > 0`
   (`zero_key_released`).
+
+Both are fixed on the branch: a key is released when `v + Z > T`, and keys with value 0 are dropped
+before noise is added. A key with value `v` is then released with probability
+`Pr[v + Z > T] = Pr[Z > T - v]` (`releaseProbStrict_eq`), which the discrete tail computed by the
+map equals at `v = Δ∞` (`discrete_bound_eq`) and the continuous tail bounds
+(`continuous_ge_discrete`, used by the Creusot proof as `tail_facts`).
 -/
 import OpenDPVerification.Laplace
 
@@ -124,5 +130,36 @@ theorem zero_key_released {s : ℝ} (hs : 0 < s) (T : ℤ) : 0 < releaseProb s 0
   refine lt_of_lt_of_le ?_ (hsum.le_tsum (T - 0) fun z _ => by split_ifs <;> simp [mass_nonneg hs])
   simp only [le_refl, ite_true]
   exact mul_pos (normalizer_pos hs) (exp_pos _)
+
+/-- `Pr[v + Z > T]`: the probability that a key with value `v` is released under the fixed rule. -/
+noncomputable def releaseProbStrict (s : ℝ) (v T : ℤ) : ℝ :=
+  ∑' z : ℤ, if T < v + z then mass s z else 0
+
+theorem releaseProbStrict_eq (s : ℝ) (v T : ℤ) : releaseProbStrict s v T = tailGt s (T - v) := by
+  unfold releaseProbStrict tailGt tailGe
+  congr 1
+  funext z
+  congr 1
+  apply propext
+  omega
+
+/-- The continuous tail `e^{-d/s} / 2` bounds the discrete tail `Pr[Z > d]`, for `d ≥ 0`. -/
+theorem continuous_ge_discrete {s : ℝ} (hs : 0 < s) (d : ℕ) :
+    tailGt s d ≤ exp (-(d : ℝ) / s) / 2 := by
+  have h0 := ratio_pos s
+  have h1 := ratio_lt_one hs
+  rw [tailGt_nat hs, tailGe_nat hs]
+  have he : exp (-(d : ℝ) / s) = ratio s ^ d := by
+    rw [ratio, ← exp_nat_mul]; ring_nf
+  rw [he]
+  have hp := pow_pos h0 d
+  rw [mul_div_assoc', div_le_div_iff₀ (by linarith) (by norm_num)]
+  nlinarith
+
+/-- Tails are probabilities: non-negative. -/
+theorem tailGt_nonneg {s : ℝ} (hs : 0 < s) (d : ℕ) : 0 ≤ tailGt s d := by
+  rw [tailGt_nat hs, tailGe_nat hs]
+  have h0 := ratio_pos s
+  positivity
 
 end OpenDP.Threshold

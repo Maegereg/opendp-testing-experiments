@@ -59,13 +59,14 @@ mod test;
 /// * `input_metric` - Metric for the input domain.
 /// * `output_measure` - Privacy measure. Either `MaxDivergence` or `ZeroConcentratedDivergence`.
 /// * `scale` - Noise scale parameter for the laplace distribution. `scale` == standard_deviation / sqrt(2).
-/// * `threshold` - Exclude counts that are less than this minimum value.
+/// * `threshold` - Exclude counts that are not greater than this value (or not less than it, if negative).
 /// * `k` - The noise granularity in terms of 2^k.
 ///
 /// # Generics
 /// * `DI` - Input Domain.
 /// * `MI` - Input Metric.
 /// * `MO` - Output Measure.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_noise_threshold<DI: NoiseDomain, MI: Metric, MO: NoiseMeasure>(
     input_domain: DI,
     input_metric: MI,

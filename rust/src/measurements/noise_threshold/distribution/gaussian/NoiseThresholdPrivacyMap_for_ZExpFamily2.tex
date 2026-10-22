@@ -34,9 +34,11 @@ None
     Otherwise the output is \texttt{Ok(privacy\_map)}
     where \texttt{privacy\_map} observes the following:
 
-    Define \texttt{function(x)} as a function that updates each pair $(k_i, v_i + Z_i)$,
+    Define \texttt{function(x)} as a function that discards pairs with value zero (the additive identity, as for a missing key),
+    updates each remaining pair to $(k_i, v_i + Z_i)$,
     where $Z_i$ are iid samples from \texttt{self},
-    and discards pairs where $v_i + Z_i$ has smaller magnitude than \texttt{|threshold|}.
+    and discards pairs where $v_i + Z_i$ is not beyond \texttt{threshold}
+    (strictly greater than a non-negative threshold, or strictly less than a negative one).
     The ordering of returned pairs is independent from the input ordering.
 
     For every pair of elements $x, x'$ in \texttt{VectorDomain<AtomDomain<IBig>{}>},

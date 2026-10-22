@@ -2,10 +2,14 @@ use dashu::{integer::UBig, rational::RBig};
 use num::Zero;
 use statrs::function::erf::erfc;
 
+#[cfg(creusot)]
+use crate::verification::{RealModel, float::FloatModel};
 use crate::{
     error::Fallible,
     traits::{InfAdd, InfCast, InfDiv, InfExp, NextFloat},
 };
+#[cfg(creusot)]
+use creusot_std::model::DeepModel;
 
 #[cfg(all(test, feature = "contrib"))]
 mod test;
@@ -25,6 +29,10 @@ mod test;
 /// P[X = x] = \frac{1}{2 s}e^{-|x|/s}, \quad
 /// \text{where } X \sim \mathcal{L}_\mathbb{R}(0, s)
 /// ```
+#[cfg_attr(creusot, creusot_std::macros::ensures(forall<o: f64> result == Ok(o) ==>
+    scale.deep_model() > creusot_std::logic::real::Real::from_int(0)
+    && o.finite() && o.real() <= creusot_std::logic::real::Real::from_int(1)
+    && o.real() >= crate::measurements::clap_tail_gt(scale.deep_model(), tail.deep_model())))]
 pub fn conservative_continuous_laplacian_tail_to_alpha(scale: RBig, tail: RBig) -> Fallible<f64> {
     check_tail_arguments(&scale, &tail)?;
     // The exponent must be rounded up (inf_cast): exp is increasing,
@@ -59,6 +67,10 @@ fn check_tail_arguments(scale: &RBig, tail: &RBig) -> Fallible<()> {
 /// P[X = x] = \frac{1 - e^{-1/scale}}{1 + e^{-1/scale}} e^{-|x|/scale}, \quad
 /// \text{where } X \sim \mathcal{L}_\mathbb{Z}(0, scale)
 /// ```
+#[cfg_attr(creusot, creusot_std::macros::ensures(forall<o: f64> result == Ok(o) ==>
+    scale.deep_model() > creusot_std::logic::real::Real::from_int(0)
+    && o.finite() && o.real() <= creusot_std::logic::real::Real::from_int(1)
+    && o.real() >= crate::measurements::dlap_tail_gt(scale.deep_model(), tail.deep_model())))]
 pub fn conservative_discrete_laplacian_tail_to_alpha(scale: RBig, tail: UBig) -> Fallible<f64> {
     check_tail_arguments(&scale, &RBig::from(tail.clone()))?;
     let numer = f64::inf_cast(-RBig::from(tail) / scale.clone())?.inf_exp()?;

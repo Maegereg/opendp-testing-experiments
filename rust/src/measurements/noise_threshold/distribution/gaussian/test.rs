@@ -156,8 +156,9 @@ fn test_make_noise_threshold_zexpfamily2_zero_scale() -> Fallible<()> {
     let meas: Measurement<_, _, Approximate<ZeroConcentratedDivergence>, _> =
         distribution.make_noise_threshold((domain, metric), ibig!(100))?;
 
-    let data = HashMap::from([(false, ibig!(0)), (true, ibig!(100))]);
-    let expected = HashMap::from([(true, ibig!(100))]);
+    // with zero noise, only values strictly greater than the threshold are released (F7)
+    let data = HashMap::from([(false, ibig!(100)), (true, ibig!(101))]);
+    let expected = HashMap::from([(true, ibig!(101))]);
     assert_eq!(meas.invoke(&data)?, expected);
 
     assert_eq!(meas.map(&(1, rbig!(0), rbig!(0)))?, (0.0, 0.0));

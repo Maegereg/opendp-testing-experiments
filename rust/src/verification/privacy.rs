@@ -12,13 +12,16 @@
 //!   into a valid measurement, and post-processing (contracts of `make_chain_mt`, `make_chain_pm`);
 //! - the mechanism theorems (`laplace_mechanism`, proved in Lean);
 //! - the definitions of the metrics, for the transformations proved stable here (`t_valid_*`).
-use creusot_std::prelude::*;
+use creusot_std::{logic::Int, prelude::*};
 use dashu::integer::IBig;
+
+use std::collections::HashMap;
 
 use crate::{
     core::{Domain, Function, Measure, Measurement, Metric, PrivacyMap, Transformation},
-    domains::{AtomDomain, VectorDomain},
+    domains::{AtomDomain, MapDomain, VectorDomain},
     metrics::{AbsoluteDistance, LpDistance},
+    traits::Hashable,
 };
 
 /// `m` is a valid measurement.
@@ -87,6 +90,51 @@ pub fn singleton_valid<T: crate::traits::CheckAtom, const P: usize, Q: Clone>(
         VectorDomain<AtomDomain<T>>,
         LpDistance<P, Q>,
     >,
+) -> bool {
+    dead
+}
+
+/// `f` releases a noisy map with thresholding: by the Proof Definition of
+/// `NoiseThresholdPrivacyMap`, it discards pairs with value zero, replaces each remaining value `v`
+/// by `v + Z` with `Z` independent samples of `rv`, and discards the pairs whose noisy value is not
+/// beyond `threshold` (strictly greater than a non-negative threshold, strictly less than a
+/// negative one), in an order independent of the input.
+#[logic(opaque)]
+pub fn adds_noise_threshold<K, RV>(
+    _f: Function<HashMap<K, IBig>, HashMap<K, IBig>>,
+    _rv: RV,
+    _threshold: IBig,
+) -> bool {
+    dead
+}
+
+/// `map` meets the Proof Definition of `NoiseThresholdPrivacyMap` for the distribution `rv` and a
+/// threshold of magnitude `threshold`: if `x`, `x'` are `d_in`-close under `MI` and
+/// `map(d_in) = d_out`, then the thresholded noisy releases of `x` and `x'` are `d_out`-close.
+#[logic(opaque)]
+pub fn noise_threshold_map_private<RV, MI: Metric, MO: Measure>(
+    _rv: RV,
+    _map: PrivacyMap<MI, MO>,
+    _threshold: Int,
+) -> bool {
+    dead
+}
+
+/// A measurement on maps whose function releases noise from `rv` with thresholding, and whose
+/// privacy map meets `NoiseThresholdPrivacyMap`'s Proof Definition for `rv` and the magnitude of
+/// the threshold, is valid.
+///
+/// Trusted: the definition of a valid measurement, given the two Proof Definitions.
+#[trusted]
+#[logic(opaque)]
+#[requires(adds_noise_threshold(m.function, rv, threshold))]
+#[requires(noise_threshold_map_private(rv, m.privacy_map,
+    if threshold.deep_model() >= 0 { threshold.deep_model() } else { -threshold.deep_model() }))]
+#[ensures(result && m_valid(m))]
+pub fn noise_threshold_measurement_valid<K: Hashable, MI: Metric, MO: Measure, RV>(
+    m: Measurement<MapDomain<AtomDomain<K>, AtomDomain<IBig>>, MI, MO, HashMap<K, IBig>>,
+    rv: RV,
+    threshold: IBig,
 ) -> bool {
     dead
 }

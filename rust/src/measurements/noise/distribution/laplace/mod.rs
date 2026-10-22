@@ -118,6 +118,10 @@ where
 impl NoisePrivacyMap<L1Distance<RBig>, MaxDivergence> for ZExpFamily<1> {
     #[cfg_attr(creusot, ensures(forall<map: PrivacyMap<L1Distance<RBig>, MaxDivergence>> result == Ok(map) ==>
         noise_map_private(*self, map)))]
+    #[cfg_attr(creusot, ensures(forall<map: PrivacyMap<L1Distance<RBig>, MaxDivergence>> result == Ok(map) ==>
+        self.scale.deep_model() >= creusot_std::logic::real::Real::from_int(0)
+        && forall<d: RBig, o: f64> map.post()[d][Ok(o)] ==>
+            laplace_bound(d.deep_model(), self.scale.deep_model(), o)))]
     fn noise_privacy_map(
         &self,
         _input_metric: &L1Distance<RBig>,

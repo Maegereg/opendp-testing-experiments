@@ -172,7 +172,7 @@ pub fn x_mul_2k(x: RBig, k: i32) -> RBig {
 /// Return `Err(e)` if scale is not finite,
 /// otherwise return `Ok(scale * 2^-k)`
 #[cfg_attr(creusot, ensures(forall<r: RBig> result == Ok(r) ==>
-    scale.finite() && r.deep_model() == scale.real() * pow2r(-k@)))]
+    scale.finite() && k@ > i32::MIN@ && r.deep_model() == scale.real() * pow2r(-k@)))]
 #[cfg_attr(creusot, ensures(k@ > i32::MIN@ && scale.finite() ==> exists<r: RBig> result == Ok(r)))]
 pub fn integerize_scale(scale: f64, k: i32) -> Fallible<RBig> {
     if k == i32::MIN {

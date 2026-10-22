@@ -69,6 +69,7 @@ mod test;
 /// * `DI` - Input Domain.
 /// * `MI` - Input Metric.
 /// * `MO` - Output Measure.
+#[cfg_attr(creusot, creusot_std::macros::trusted)]
 pub fn make_gaussian_threshold<DI: NoiseDomain, MI: Metric, MO: 'static + Measure>(
     input_domain: DI,
     input_metric: MI,
@@ -94,6 +95,15 @@ where
     <DI::Atom as Nature>::RV<2>: MakeNoiseThreshold<DI, MI, MO, Threshold = DI::Atom>,
 {
     type Threshold = DI::Atom;
+
+    /// Out of scope (Gaussian): no claim.
+    #[cfg(creusot)]
+    #[creusot_std::macros::logic(open)]
+    fn noise_threshold_claim(_m: Measurement<DI, MI, MO, DI::Carrier>) -> bool {
+        true
+    }
+
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
     fn make_noise_threshold(
         self,
         input_space: (DI, MI),
@@ -112,6 +122,11 @@ impl
         Approximate<ZeroConcentratedDivergence>,
     > for ZExpFamily<2>
 {
+    // Trusted: out of scope (Gaussian); the contract is the trait's.
+    #[cfg_attr(creusot, creusot_std::macros::trusted)]
+    #[cfg_attr(creusot, creusot_std::macros::ensures(forall<map: PrivacyMap<L02InfDistance<AbsoluteDistance<RBig>>, Approximate<ZeroConcentratedDivergence>>>
+        result == Ok(map) ==> crate::verification::privacy::noise_threshold_map_private(*self, map,
+            creusot_std::model::DeepModel::deep_model(threshold))))]
     fn noise_threshold_privacy_map(
         &self,
         _input_metric: &L02InfDistance<AbsoluteDistance<RBig>>,

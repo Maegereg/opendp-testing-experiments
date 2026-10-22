@@ -21,7 +21,8 @@ export CREUSOT_STD_PATH=/path/to/creusot/creusot-std
 tools/creusot.sh 'transformations::sum::*' 'transformations::count::*' \
   'transformations::clamp::*' 'transformations::manipulation::*' \
   'transformations::scalar_to_vector::*' 'transformations::cast_metric::*' \
-  'transformations::resize::*' 'transformations::impute::*' 'combinators::chain::*' 'measurements::noise::*' \
+  'transformations::resize::*' 'transformations::impute::*' 'combinators::chain::*' \
+  'measurements::noise_threshold::*' 'measurements::noise::*' \
   'verification::*' 'traits::*' 'domains::*' \
   'core::impl_Function_TI_TO_2::*' 'core::impl_StabilityMap_MI_MO_1::*' \
   'core::impl_Measurement_DI_MI_MO_TO::new'
@@ -524,6 +525,64 @@ Code changes:
   individually.
 - `same_len`, `count_push`, `sub_same` and `id_witness` moved from `make_resize`'s proof to
   `verification/{multiset,rows}.rs`.
+
+## Status: `make_laplace_threshold`
+
+Verified (Creusot, with the mechanism theorem cited, as `make_laplace` phase 1) for every atom
+type (floats and integers), after fixing F7 and F8 (`FINDINGS.md`): `make_laplace_threshold`
+returns valid measurements (`noise_threshold_claim`; for `f64` and `i32` counts keyed by `String`,
+`make_laplace_threshold_{f64,i32}_valid`), given the assumptions in `TRUST.md`, including:
+- the threshold mechanism theorem (cited, Rogers 2023);
+- the samplers draw the distributions they claim (not verified);
+- the definition of `L0PInfDistance` on maps.
+
+What is proved:
+
+1. **The privacy map** (`threshold_loss`, `rust/src/measurements/noise_threshold/distribution/laplace/`):
+   it floors the sensitivities, tightens `l1` and `li` against each other, returns `(0, 0)` for zero
+   sensitivity and `(∞, 1)` for zero scale, and otherwise `ε` from the Laplace map and
+   `δ = 1 - (1 - δ1)^l0` (rounded up, capped at 1), where `δ1` is the smaller computable tail bound
+   at `T - Δ∞`. This is `threshold_bound`, the hypothesis of the cited theorem.
+2. **The release rule**: a pair is kept when its noisy value is strictly beyond the threshold
+   (`is_beyond`).
+3. **The conversions** of float and integer maps to integer maps (`nature/`): keys are kept, and
+   values are converted exactly or rounded to multiples of `2^k`. Per key, rounded values differ by
+   at most `(|a - b| + 2^k - 2^min_k) / 2^k`, also against a missing key (`map_rounding_stable`,
+   from `make_laplace`'s `elem_bound` and the new `absent_bound`). The stability maps add this slack
+   `l0` times to the L1 distance and once to the L∞ distance.
+4. **The mechanisms and `make_laplace_threshold`**, chaining these with `>>`.
+
+Found and fixed:
+- F7: the map computed `δ` from `Pr[Z > T - Δ∞]`, while keys with `v + Z = T` were released. Fixed
+  by releasing only values strictly beyond the threshold. Proved before the fix
+  (`Threshold.lean`: `threshold_delta_too_small`), and after it the tail the map computes is the
+  release probability (`releaseProbStrict_eq`, `discrete_bound_eq`).
+- F8: keys with value 0, which the metric equates with missing keys, were released with positive
+  probability (`zero_key_released`). Fixed by dropping them before adding noise.
+
+Both fixes change the shared release rule, so `make_gaussian_threshold` changes too (and its F7
+analogue is fixed); it is not verified.
+
+Mutation checks: each of the following makes verification fail:
+- releasing values equal to the threshold (reverting F7);
+- the tail bound one step too far, or computed for one key instead of `l0`;
+- no check that the threshold is at least the L∞ sensitivity;
+- the float conversion's L1 slack added once instead of `l0` times, or no slack on L∞;
+- swapping the L1 and L∞ distances in the integer conversion.
+Removing the zero filter (F8) is not caught: it is in the trusted noise function, and is covered by
+`test_laplace_threshold_drops_zero_keys`.
+
+Code changes:
+- F7: the release rule is `v + Z > T` (`< T` for a negative threshold), and the docs say so.
+- F8: zero values are dropped before noise is added.
+- The privacy map closure calls `threshold_loss`; the float arithmetic for `δ` is in `joint_delta`
+  and `min_one`. The noise function is `noise_threshold_function`, with the keep rule in
+  `is_beyond`.
+- The conversions use `map_values` with per-value helpers (`discretize_value`,
+  `IBig::from`) and distance helpers (`float_threshold_distance`, `int_threshold_distance`), and
+  clone only the key domain instead of the whole input domain.
+- `measurements::noise_threshold` is no longer a trusted module; out-of-scope items are trusted
+  individually. The Laplace noise map (`make_laplace`) states its bound in its contract.
 
 ## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 

@@ -685,6 +685,7 @@ impl FloatBits for f32 {
 /// # Proof Definition
 /// Return the minimum of `a` and `b` if both are `Some`,
 /// or the `Some` value if only one is `Some`.
+#[cfg_attr(creusot, creusot_std::macros::ensures(forall<x: T> result == Some(x) ==> a == Some(x) || b == Some(x)))]
 pub(crate) fn option_min<T: PartialOrd>(a: Option<T>, b: Option<T>) -> Option<T> {
     match (a, b) {
         (Some(a), Some(b)) => match a.partial_cmp(&b) {

@@ -206,7 +206,14 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
     `δ = 0.023`.
 - **Impact:** The `(ε, δ)` guarantee of `make_laplace_threshold` is wrong: the actual `δ` is up to
   `e^{1/scale}` times the reported one (2.7 times at scale 1). Reachable from Python and the FFI.
-- **Status:** Confirmed, not yet fixed.
+- **Status:** Fixed on this branch by making the release rule strict: a key is kept when its noisy
+  value is strictly beyond the threshold (`v + Z > T`, or `< T` for a negative threshold), so it is
+  released with probability `Pr[Z > T - v]`, which the existing `δ` bounds. The rule is shared, so
+  this also changes (and fixes) `make_gaussian_threshold`, whose map also bounds `Pr[X > t]`. The
+  Laplace privacy map is proved against the corrected mechanism theorem, and the Lean file shows
+  the computed tail is exactly the new release probability (`releaseProbStrict_eq`,
+  `discrete_bound_eq`). Tests: `test_laplace_threshold_delta_bounds_release`, and existing tests
+  updated so that a value exactly at the threshold is not released.
 
 ### F8. The threshold mechanisms leak keys whose value is zero
 
@@ -225,7 +232,11 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   not covered by the privacy map (at distance 0, any positive probability violates `(0, 0)`). Maps
   from `make_count_by` hold only observed keys with positive counts, so the common pipeline is not
   affected; maps built otherwise (or after transformations that can produce zeros) are.
-- **Status:** Confirmed, not yet fixed.
+- **Status:** Fixed on this branch: keys with value 0 are dropped before noise is added, so the
+  mechanism treats them as the metric does (as missing keys). For float maps, values that round
+  to 0 are dropped in the same way. Test: `test_laplace_threshold_drops_zero_keys`. The drop is
+  in the trusted noise function (`noise_threshold_function`), so this test, not the proof, guards
+  it.
 
 ## Fragile derivations
 

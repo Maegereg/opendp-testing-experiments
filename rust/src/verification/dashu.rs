@@ -254,6 +254,52 @@ extern_spec! {
         fn neg(self) -> IBig;
     }
 
+    impl IBig {
+        #[ensures((result.0 == Sign::Positive) == (self.deep_model() >= 0))]
+        #[ensures(result.1.deep_model() == if self.deep_model() >= 0 { self.deep_model() } else { -self.deep_model() })]
+        fn into_parts(self) -> (Sign, UBig);
+    }
+
+    impl UBig {
+        #[ensures(result == (self.deep_model() == 0))]
+        fn is_zero(&self) -> bool;
+    }
+
+    impl RBig {
+        // Only used to round a threshold; no property of the result is needed.
+        fn round(&self) -> IBig;
+
+        #[ensures(Real::from_int(result.deep_model()) <= self.deep_model())]
+        #[ensures(self.deep_model() < Real::from_int(result.deep_model() + 1))]
+        fn floor(&self) -> IBig;
+    }
+
+    impl<'l, 'r> Mul<&'r u32> for &'l UBig {
+        #[ensures(result.deep_model() == self.deep_model() * rhs@)]
+        fn mul(self, rhs: &'r u32) -> UBig;
+    }
+
+    impl<'l> Sub<UBig> for &'l UBig {
+        #[requires(rhs.deep_model() <= self.deep_model())]
+        #[ensures(result.deep_model() == self.deep_model() - rhs.deep_model())]
+        fn sub(self, rhs: UBig) -> UBig;
+    }
+
+    impl Clone for IBig {
+        #[ensures(result.deep_model() == self.deep_model())]
+        fn clone(&self) -> IBig;
+    }
+
+    impl Clone for UBig {
+        #[ensures(result.deep_model() == self.deep_model())]
+        fn clone(&self) -> UBig;
+    }
+
+    impl From<UBig> for RBig {
+        #[ensures(result.deep_model() == Real::from_int(value.deep_model()))]
+        fn from(value: UBig) -> RBig;
+    }
+
     impl Clone for RBig {
         #[ensures(result.deep_model() == self.deep_model())]
         fn clone(&self) -> RBig;

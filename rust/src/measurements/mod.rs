@@ -33,7 +33,6 @@ mod noise;
 pub use noise::*;
 
 #[cfg(feature = "contrib")]
-#[cfg_attr(creusot, creusot_std::macros::trusted)]
 mod noise_threshold;
 #[cfg(feature = "contrib")]
 pub use noise_threshold::*;

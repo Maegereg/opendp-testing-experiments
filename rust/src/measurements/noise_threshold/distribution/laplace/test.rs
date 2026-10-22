@@ -165,8 +165,9 @@ fn test_make_noise_threshold_zexpfamily1_zero_scale() -> Fallible<()> {
     let meas: Measurement<_, _, Approximate<MaxDivergence>, _> =
         distribution.make_noise_threshold((domain, metric), ibig!(100))?;
 
-    let data = HashMap::from([(false, ibig!(0)), (true, ibig!(100))]);
-    let expected = HashMap::from([(true, ibig!(100))]);
+    // with zero noise, only values strictly greater than the threshold are released (F7)
+    let data = HashMap::from([(false, ibig!(100)), (true, ibig!(101))]);
+    let expected = HashMap::from([(true, ibig!(101))]);
     assert_eq!(meas.invoke(&data)?, expected);
 
     assert_eq!(meas.map(&(1, rbig!(0), rbig!(0)))?, (0.0, 0.0));
@@ -179,8 +180,9 @@ fn test_laplace_threshold_int() -> Fallible<()> {
     let input_domain = MapDomain::new(AtomDomain::<bool>::default(), AtomDomain::<i32>::default());
     let input_metric = L0PInfDistance(AbsoluteDistance::<i32>::default());
     let m_thresh =
-        make_laplace_threshold(input_domain.clone(), input_metric.clone(), 0.0, 10, None)?;
+        make_laplace_threshold(input_domain.clone(), input_metric.clone(), 0.0, 9, None)?;
 
+    // only values strictly greater than the threshold are released (F7)
     let release = m_thresh.invoke(&HashMap::from([(false, 9), (true, 10)]))?;
     assert_eq!(release, HashMap::from([(true, 10)]));
     assert_eq!(m_thresh.map(&(1, 1, 1))?, (f64::INFINITY, 1.0));
@@ -200,8 +202,9 @@ fn test_laplace_threshold_float() -> Fallible<()> {
     // when k is None, the grid is on subnormal increments, so nothing rounds, all values are exact
     let m_thresh = make_laplace_threshold(input_domain, input_metric, 0.0, 10.0, None)?;
 
-    let release = m_thresh.invoke(&HashMap::from([(false, 9.99999999), (true, 10.0)]))?;
-    assert_eq!(release, HashMap::from([(true, 10.0)]));
+    // only values strictly greater than the threshold are released (F7)
+    let release = m_thresh.invoke(&HashMap::from([(false, 10.0), (true, 10.00000001)]))?;
+    assert_eq!(release, HashMap::from([(true, 10.00000001)]));
     assert_eq!(m_thresh.map(&(1, 1, 1))?, (f64::INFINITY, 1.0));
     Ok(())
 }
@@ -213,11 +216,52 @@ fn test_laplace_threshold_float_k() -> Fallible<()> {
         AtomDomain::<f64>::new_non_nan(),
     );
     let input_metric = L0PInfDistance(AbsoluteDistance::<i32>::default());
-    // k = -1 means grid is on 0.5 increments, so 9.74 rounds to 9.5 and 9.76 rounds to 10.0
-    let m_thresh = make_laplace_threshold(input_domain, input_metric, 0.0, 9.9, Some(-1))?;
+    // k = -1 means grid is on 0.5 increments, so 9.74 rounds to 9.5, 9.76 rounds to 10.0,
+    // and the threshold 9.6 rounds to 9.5; only values strictly greater are released (F7)
+    let m_thresh = make_laplace_threshold(input_domain, input_metric, 0.0, 9.6, Some(-1))?;
 
     let release = m_thresh.invoke(&HashMap::from([(false, 9.74999), (true, 9.7500001)]))?;
     assert_eq!(release, HashMap::from([(true, 10.0)]));
     assert_eq!(m_thresh.map(&(1, 1, 1))?, (f64::INFINITY, 1.0));
+    Ok(())
+}
+
+/// FINDINGS.md F8: a key with value zero is the same as a missing key under the input metric,
+/// so it is never released.
+#[test]
+fn test_laplace_threshold_drops_zero_keys() -> Fallible<()> {
+    let input_domain = MapDomain::new(AtomDomain::<bool>::default(), AtomDomain::<i32>::default());
+    let input_metric = L0PInfDistance(AbsoluteDistance::<i32>::default());
+    // a negative threshold releases values strictly below it, so a noisy 0 would usually pass
+    let m_thresh = make_laplace_threshold(input_domain, input_metric, 1.0, -1, None)?;
+    for _ in 0..1000 {
+        assert!(
+            !m_thresh
+                .invoke(&HashMap::from([(true, 0)]))?
+                .contains_key(&true)
+        );
+    }
+    Ok(())
+}
+
+/// FINDINGS.md F7: a key present in only one of two neighbouring datasets, with value at most
+/// the l-infinity sensitivity, is released with probability at most delta.
+#[test]
+fn test_laplace_threshold_delta_bounds_release() -> Fallible<()> {
+    let input_domain = MapDomain::new(AtomDomain::<bool>::default(), AtomDomain::<i32>::default());
+    let input_metric = L0PInfDistance(AbsoluteDistance::<i32>::default());
+    let m_thresh = make_laplace_threshold(input_domain, input_metric, 1.0, 3, None)?;
+    let (_, delta) = m_thresh.map(&(1, 1, 1))?;
+    // `{true: 1}` releases `true` with probability Pr[Z > 2] = e^-2 / (e + 1) ~ 0.0364
+    let n = 100_000;
+    let data = HashMap::from([(true, 1)]);
+    let mut hits = 0;
+    for _ in 0..n {
+        if m_thresh.invoke(&data)?.contains_key(&true) {
+            hits += 1;
+        }
+    }
+    // the standard deviation of the frequency is about 0.0006
+    assert!((hits as f64 / n as f64) < delta + 0.003);
     Ok(())
 }
