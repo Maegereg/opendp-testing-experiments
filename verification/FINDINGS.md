@@ -238,6 +238,127 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
   in the trusted noise function (`noise_threshold_function`), so this test, not the proof, guards
   it.
 
+### F9. `make_np_clamp` outputs can lie outside the norm ball when `origin` is far from zero
+
+`make_np_clamp` (`python/src/opendp/extras/numpy/_make_np_clamp/__init__.py`) is pure Python and
+numpy. F9-F16 concern it. F9-F14 are proved in `verification/lean/OpenDPVerification/NpClamp.lean`
+against a hand transcription of `_function` and a model of the numpy operations it uses
+(`TRUST.md`), and all of F9-F16 reproduce with numpy 2.5 and opendp
+(`verification/scripts/np_clamp_counterexamples.py`). The constructor needs only the `contrib`
+feature, not `idealized-numerics`, so its claims are meant to hold for floats.
+
+- **What:** The function clamps `arg = x - origin` and returns `arg + origin`. That addition rounds,
+  so the output can be farther from `origin` than `norm`: by up to half the float spacing at
+  `origin`, per coordinate.
+- **Confirmed:**
+  - By proof (`origin_rounding`): with `origin = [2^56]`, `norm = 12` and `p = 2`, the row
+    `[2^56 + 48]` is clamped to `[2^56 + 12]`, which rounds to `[2^56 + 16]` (floats near `2^56` are
+    16 apart). The output fails the output domain's own check.
+  - By running it: the output is 16 from the origin and is not a member of the output domain.
+- **Impact:** The output domain's norm bound, which downstream sensitivities use, is exceeded by up
+  to `sqrt(d)` times half the spacing at `|origin|`. This is negligible unless `|origin|` is about
+  `2^52 · norm` or more. PCA passes a DP estimate of the mean as `origin`. Its consumers
+  (`make_np_sum`, PCA) require `idealized-numerics` anyway.
+- **Status:** Recorded; not fixed.
+
+### F10. `make_np_clamp` misses large rows when the L2 norm underflows
+
+- **What:** `np.linalg.norm(x, ord=2)` squares each element without rescaling, so squares below
+  about `2^-1075` round to 0. With a bound below about `1e-154`, a row can be above the bound but
+  have computed norm 0. The row is then output unchanged, and the domain's check (the same
+  computation) accepts it.
+- **Confirmed:** by proof (`l2_underflow`: `norm = 2^-600`, row `[2^-565, 0]`), and by running it.
+- **Impact:** Only for absurdly small bounds (below about `1e-154`).
+- **Status:** Recorded; not fixed.
+
+### F11. `make_np_clamp` can loop forever, depending on the data
+
+- **What:** The loop divides each row by `max(norm(row) / norm, 1)` until every computed norm is
+  within the bound. Dividing a tiny element by a factor close to 1 can round back to the same
+  element. If every element of a row above the bound is like that, the loop never ends.
+- **Confirmed:**
+  - By proof, with `p = 1`:
+    - `nonterm_subnormal`: `norm` is 3 times the smallest subnormal, and the row is four smallest
+      subnormals.
+    - `nonterm_normal`: `norm = 2^-1022`, the smallest normal float. The row has three subnormal
+      elements whose sum is one spacing above the bound. The factor is `1 + 2^-52`, and each
+      element rounds back to itself.
+  - By running it: neither call returns.
+- **What is proved instead** (`clamp_terminates`): the loop terminates when `norm` is a normal
+  float, and for `p = 1` when also `norm ≥ d · 2^-1022` for `d ≤ 2^53` columns. Then each pass
+  shrinks some element of each row above the bound by at least one representable step. The two
+  counterexamples show neither condition can be dropped. Termination for `p = 2` with a subnormal
+  bound is neither proved nor refuted.
+- **Impact:** A data-dependent hang (availability, and a timing channel), only for bounds below
+  `d · 2^-1022`.
+- **Status:** Recorded; not fixed. Rejecting bounds below `d · 2^-1022` (or below the smallest
+  normal float for `p = 2`) would satisfy the termination theorem.
+
+### F12. `make_np_clamp` with `norm` equal to the largest float accepts rows of infinite norm
+
+- **What:** `get_norm` applies `np.nan_to_num`, which turns an infinite norm into the largest
+  finite float. With `norm` equal to that float, a row whose norm overflows is treated as within
+  the bound and output unchanged, but the output domain's check computes the norm `inf`.
+- **Confirmed:** by proof (`max_bound_overflow`, `p = 1`, row `[MAX, MAX]`, for any format), and by
+  running it.
+- **Impact:** Only for `norm = MAX`, where the downstream sensitivity is useless anyway.
+- **What is proved instead** (`clamp_member_zero_origin`): with origin zero and `norm < MAX`,
+  every output row passes the domain's norm check.
+- **Status:** Recorded; not fixed.
+
+### F13. `make_np_clamp` raises on the empty dataset
+
+- **What:** `current_norm.max()` raises `ValueError` on an array with no rows. The function
+  therefore raises on the empty dataset, and returns on its neighbours.
+- **Confirmed:** by proof, in the model (`empty_error`, where the model encodes numpy's behavior
+  on empty arrays), and by running it.
+- **Impact:** Whether the dataset is empty is revealed exactly, through the exception, for domains
+  without a known size. The stability map `d_in ↦ d_in` assumes the function returns on both
+  neighbours.
+- **Status:** Recorded; not fixed. Returning the empty array (`if arg.size == 0` or
+  `max(..., initial=0)`) would remove it.
+
+### F14. `make_np_clamp` keeps `cardinalities` that clamping can invalidate
+
+- **What:** The output domain copies the input domain's descriptor, including `cardinalities` (the
+  maximum number of distinct values per column). Clamping scales each row by its own factor, so
+  equal values in a column can become different.
+- **Confirmed:** by proof (`cardinalities`: with `p = 1` and `norm = 1`,
+  `[[2, 0], [2, 2]]` becomes `[[1, 0], [0.5, 0.5]]`, so the first column goes from one distinct value
+  to two), and by running it: the output is not a member of the output domain.
+- **Impact:** No code reads `cardinalities` from a numpy array domain today. A future consumer
+  would rely on a false bound.
+- **Status:** Recorded; not fixed. Dropping `cardinalities` from the output descriptor would fix
+  it.
+
+### F15. `make_np_clamp` clamps rows differently depending on the array's memory layout
+
+- **What:** numpy sums the rows of a Fortran-ordered array in a different order than those of a
+  C-ordered one. The computed norms, and so the clamped rows, can differ in the last bits.
+  The same dataset in two layouts can therefore give outputs at symmetric distance greater than
+  0. More generally, `d_out ≤ d_in` needs the summation order of a row to depend only on the row.
+- **Confirmed:** by running it only: a `4 × 16` normal sample (seed 1) has one row clamped
+  differently in the two layouts (by `1.1e-16`). For C-ordered arrays, row norms were the same
+  whatever the number of rows, for every shape tried.
+- **What is proved instead** (`clamp_map`, `clamp_stable`): when the summation order depends only
+  on the row length (as for C-ordered arrays), each output row depends only on its input row,
+  despite the loop over the whole array, and `d_out ≤ d_in`.
+- **Impact:** Differences are at the level of rounding, and arise only if neighbouring datasets
+  could have different layouts.
+- **Status:** Recorded; not fixed. Converting the input with `np.ascontiguousarray` would remove
+  the dependence (on numpy's current behavior).
+
+### F16. `make_np_clamp` on `float32` data clamps to the `float32` rounding of `norm`
+
+- **What:** With `float32` arrays, numpy 2 converts the Python float `norm` to `float32` in
+  `current_norm.max() > norm` and `current_norm / norm`. `float32(norm)` can exceed `norm`.
+- **Confirmed:** by running it only: with `norm = 0.1` and `float32` data, the rows of the output
+  have exact norms `0.1000000015` and `0.10000000000000005`, both above `0.1`. The output fails the
+  output domain's own check.
+- **Impact:** The bound is exceeded by up to a relative `2^-24`, for ordinary parameters.
+  `make_np_sum` and PCA, which use the bound, require `idealized-numerics`.
+- **Status:** Recorded; not fixed.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`

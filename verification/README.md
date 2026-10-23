@@ -584,6 +584,67 @@ Code changes:
 - `measurements::noise_threshold` is no longer a trusted module; out-of-scope items are trusted
   individually. The Laplace noise map (`make_laplace`) states its bound in its contract.
 
+## Status: `make_np_clamp` (Python and numpy, Lean)
+
+`make_np_clamp` is Python code over numpy, so Creusot does not apply. Its `_function` is
+transcribed by hand into Lean (`verification/lean/OpenDPVerification/NpClamp.lean`). The
+transcription runs over a model of the numpy operations it uses:
+- IEEE arithmetic on each element, with infinities and NaN;
+- `np.linalg.norm` as numpy computes it;
+- a summation order that is fixed but unspecified per row length.
+
+The model and the transcription are trusted (`TRUST.md`).
+
+What is proved (for any binary format, so `float64` and `float32`):
+
+1. **Rows are clamped independently** (`clamp_map`). The loop runs over the whole array until
+   every row is within the bound, so a row may be divided more often than it needs. But a row
+   within the bound has a factor that rounds to at most 1, so further passes leave it unchanged
+   (`body_eq_self`). Each output row is therefore a function of its input row alone.
+2. **Stability** (`clamp_stable`). On datasets where the function returns, the outputs are no
+   farther apart than the inputs under the symmetric distance. This is the claimed map
+   `d_in ↦ d_in`.
+3. **No NaN** in the output (`clamp_no_nan`).
+4. **The output domain's norm check**, with origin zero and `norm` below the largest float
+   (`clamp_member_zero_origin`).
+5. **Termination** (`clamp_terminates`), when `norm` is a normal float, and for `p = 1` also
+   `norm ≥ d · 2^-1022`. Each pass shrinks a normal element of every row above the bound by at
+   least one representable step (`abs_rne_div_lt`, `factor_ge`), and a row of subnormals is
+   within such a bound.
+
+Found and proved (counterexamples in Lean), all recorded and not fixed:
+- F9: `arg + origin` rounds, so outputs can lie outside the ball (`origin_rounding`).
+- F10: squares underflow in the L2 norm, so tiny bounds miss rows (`l2_underflow`).
+- F11: the loop can run forever, for `norm` below `d · 2^-1022` with `p = 1`
+  (`nonterm_subnormal`, `nonterm_normal`).
+- F12: `norm` equal to the largest float accepts rows of infinite norm (`max_bound_overflow`).
+- F13: the empty dataset raises, revealing emptiness (`empty_error`).
+- F14: the output domain keeps `cardinalities` that clamping invalidates (`cardinalities`).
+
+Found by running it only:
+- F15: row norms depend on the array's memory layout.
+- F16: `float32` data is clamped to `float32(norm)`, which can exceed `norm`.
+
+All eight reproduce with numpy 2.5 and the opendp package, whose `make_np_clamp` and
+`array2_domain` are identical to this branch's:
+
+```sh
+uv run --with opendp --with numpy python -I verification/scripts/np_clamp_counterexamples.py
+```
+
+Mutation checks: each of the following makes the Lean build fail:
+- dividing every row by the largest factor in the array (rows are no longer independent):
+  `loop_spec` and `clamp_map` fail;
+- `max(factor, 1)` replaced by `factor` (rows within the bound are rescaled): `body_eq_self`
+  fails;
+- looping while a norm is at least the bound, rather than above it (a row exactly at the bound
+  would never change): `body_eq_self`, `factor_ge` and the termination proof fail.
+
+`nonterm_subnormal` and `nonterm_normal` show that the conditions of `clamp_terminates` are
+needed: without them the theorem is false.
+
+No code changes.
+
 ## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 
 Verified, for every atom type (floats and integers, scalar and vector inputs): `make_laplace`

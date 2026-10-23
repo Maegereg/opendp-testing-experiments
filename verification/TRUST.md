@@ -130,6 +130,7 @@ a model of floating-point rounding. Its theorems depend only on Lean's standard 
 | --- | --- | --- |
 | `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls), whose Creusot contract they justify | See below. |
 | `OpenDP.Float.Fmt.satSeqSum_err` | `Sequential::<T>::saturating_sum`, justifying `seq_saturating_sum_error` | IEEE arithmetic and the transcription, as below; `saturating_add` is IEEE addition clamped to `[-MAX, MAX]` (an infinity clamps to `±MAX`). |
+| `OpenDP.NpClamp.Clamp.clamp_map`, `clamp_stable`, `clamp_no_nan`, `clamp_member_zero_origin`, `clamp_terminates`, and the counterexamples F9-F14 | `make_np_clamp` (Python, `python/src/opendp/extras/numpy/_make_np_clamp/`) | The numpy model and the transcription, below. |
 
 Assumptions of these theorems:
 
@@ -149,3 +150,32 @@ Assumptions of these theorems:
 - **Exact helpers.** `alerting_abs` and `total_max` are exact on floats (as in the Creusot
   contracts), and the bounds are not NaN (`mag` is then a real number).
 - **Sizes.** `size < 2^64` (`usize`).
+
+Assumptions of the `make_np_clamp` theorems (`NpClamp.lean`):
+
+- **Transcription.** `Clamp.clamp` transcribes `_function` by hand:
+  - `arg - origin`, then `nan_to_num`;
+  - the `while current_norm.max() > norm` loop (with fuel, to state termination);
+  - `arg + origin`.
+
+  `Clamp.memberNorm` transcribes the norm check of `array2_domain`'s member function. Nothing ties
+  the transcription to the Python mechanically. `verification/scripts/np_clamp_counterexamples.py`
+  checks that each counterexample behaves the same in numpy.
+- **numpy element-wise operations are IEEE operations.** `-`, `+`, `*`, `/`, `np.sqrt`, `np.abs`,
+  `np.maximum` and `np.nan_to_num` on `float64` (or `float32`) arrays act on each element as IEEE 754
+  operations, rounding to nearest with ties to even and overflowing to infinities (`F64`, over
+  `Fmt.rne`). Signed zeros are not modelled.
+- **numpy's norm.** `np.linalg.norm(x, ord=p, axis=1)` computes, per row:
+  - `add.reduce(abs(x))` for `p = 1`;
+  - `sqrt(add.reduce(x * x))` for `p = 2`.
+
+  This is from numpy's `linalg/_linalg.py`.
+- **numpy's summation order.** `add.reduce` sums each row along a binary tree that depends only on
+  the row length (`Plan`). This holds for C-ordered arrays, as observed. It fails for Fortran-ordered
+  arrays (F15). The theorems hold for every such tree, so the exact pairwise order does not matter.
+- **Empty arrays.** `.max()` raises on an array with no rows.
+- **One format.** The data and the bound are in the same format. With `float32` data, numpy rounds
+  the bound to `float32` (F16), so the theorems apply with the rounded bound.
+- **Domain.** The symmetric distance compares datasets as multisets of rows, with rows compared as
+  values (NaN equal to NaN).
+
