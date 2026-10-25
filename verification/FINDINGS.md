@@ -241,11 +241,13 @@ documented contract), a **fragile derivation** (correct, but for undocumented re
 ### F9. `make_np_clamp` outputs can lie outside the norm ball when `origin` is far from zero
 
 `make_np_clamp` (`python/src/opendp/extras/numpy/_make_np_clamp/__init__.py`) is pure Python and
-numpy. F9-F16 concern it. F9-F14 are proved in `verification/lean/OpenDPVerification/NpClamp.lean`
-against a hand transcription of `_function` and a model of the numpy operations it uses
-(`TRUST.md`), and all of F9-F16 reproduce with numpy 2.5 and opendp
+numpy. F9-F17 concern it. F9-F14 are proved in `verification/lean/OpenDPVerification/NpClamp.lean`
+against a hand transcription of `_function` (`clampV0`) and a model of the numpy operations it uses
+(`TRUST.md`). All of F9-F17 reproduce with numpy 2.5 and the released opendp package
 (`verification/scripts/np_clamp_counterexamples.py`). The constructor needs only the `contrib`
-feature, not `idealized-numerics`, so its claims are meant to hold for floats.
+feature, not `idealized-numerics`, so its claims are meant to hold for floats. All are fixed on
+this branch. The fixed code is proved in the same file (`clamp`). Each fix has a regression test in
+`python/test/extras/test_clamp_numpy.py`, and each test fails on the code before the fixes.
 
 - **What:** The function clamps `arg = x - origin` and returns `arg + origin`. That addition rounds,
   so the output can be farther from `origin` than `norm`: by up to half the float spacing at
@@ -259,7 +261,10 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   to `sqrt(d)` times half the spacing at `|origin|`. This is negligible unless `|origin|` is about
   `2^52 · norm` or more. PCA passes a DP estimate of the mean as `origin`. Its consumers
   (`make_np_sum`, PCA) require `idealized-numerics` anyway.
-- **Status:** Recorded; not fixed.
+- **Status:** Fixed on this branch. After adding `origin` back, the function recomputes each row's
+  norm with the domain's check, and replaces rows outside the ball by `origin`. Proved:
+  `clamp_member`, every output row passes the domain's check, for any origin. Test:
+  `test_clamp_origin_rounding`.
 
 ### F10. `make_np_clamp` misses large rows when the L2 norm underflows
 
@@ -269,7 +274,17 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   computation) accepts it.
 - **Confirmed:** by proof (`l2_underflow`: `norm = 2^-600`, row `[2^-565, 0]`), and by running it.
 - **Impact:** Only for absurdly small bounds (below about `1e-154`).
-- **Status:** Recorded; not fixed.
+- **Status:** Fixed on this branch: `norm` must be at least `2^-458` for `float64` data (`2^-39`
+  for `float32`).
+  - Proved (`l2_true_norm`, `clamp_true_norm`, origin zero): a row with computed L2 norm `c` has
+    true squared norm at most `((c + η)² + n η) / (1 - 2^-p)^(n+2)`, with `η` half the smallest
+    subnormal.
+  - The minimum norm makes `n η ≤ (2^-p norm)²` and `η ≤ 2^-p norm` for `n ≤ 2^p` columns
+    (`min_norm_f64`, `min_norm_f32`).
+  - The excess is then a relative rounding error, about `(n/2 + 2) 2^-p` (`slack_le`).
+  - For `p = 1` there is no underflow: the true norm is at most `c / (1 - 2^-p)^(n-1)`
+    (`l1_true_norm`).
+  - Test: `test_clamp_rejects_tiny_norm`.
 
 ### F11. `make_np_clamp` can loop forever, depending on the data
 
@@ -291,8 +306,12 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   bound is neither proved nor refuted.
 - **Impact:** A data-dependent hang (availability, and a timing channel), only for bounds below
   `d · 2^-1022`.
-- **Status:** Recorded; not fixed. Rejecting bounds below `d · 2^-1022` (or below the smallest
-  normal float for `p = 2`) would satisfy the termination theorem.
+- **Status:** Fixed on this branch by the same minimum norm (F10).
+  - `2^-458` is at least `2^p · 2^-1022` (`2^-39` is at least `2^24 · 2^-126` for `float32`). So
+    the hypotheses of `clamp_terminates` hold for rows of at most `2^p` values (`TermHyp.of_min`,
+    `min_norm_f64`, `min_norm_f32`).
+  - `float32` arrays with more than `2^24` columns are not covered.
+  - Test: `test_clamp_rejects_tiny_norm`.
 
 ### F12. `make_np_clamp` with `norm` equal to the largest float accepts rows of infinite norm
 
@@ -302,9 +321,9 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
 - **Confirmed:** by proof (`max_bound_overflow`, `p = 1`, row `[MAX, MAX]`, for any format), and by
   running it.
 - **Impact:** Only for `norm = MAX`, where the downstream sensitivity is useless anyway.
-- **What is proved instead** (`clamp_member_zero_origin`): with origin zero and `norm < MAX`,
-  every output row passes the domain's norm check.
-- **Status:** Recorded; not fixed.
+- **Status:** Fixed on this branch by the recheck of F9: the row's norm is recomputed without
+  `nan_to_num`, so it is `inf`, and the row is replaced by `origin`. Proved: `clamp_member`. Test:
+  `test_clamp_max_norm`.
 
 ### F13. `make_np_clamp` raises on the empty dataset
 
@@ -315,8 +334,12 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
 - **Impact:** Whether the dataset is empty is revealed exactly, through the exception, for domains
   without a known size. The stability map `d_in ↦ d_in` assumes the function returns on both
   neighbours.
-- **Status:** Recorded; not fixed. Returning the empty array (`if arg.size == 0` or
-  `max(..., initial=0)`) would remove it.
+- **Status:** Fixed on this branch.
+  - The loop condition is `(current_norm > norm).any()`, which is false on an empty array, so the
+    empty dataset is clamped to itself. Proved: `clamp_empty`, and `clamp_terminates` now holds for
+    every dataset.
+  - The domain's check used `.max()` too, so empty arrays were not members. It now uses `.any()`.
+  - Test: `test_clamp_empty`.
 
 ### F14. `make_np_clamp` keeps `cardinalities` that clamping can invalidate
 
@@ -328,8 +351,8 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   to two), and by running it: the output is not a member of the output domain.
 - **Impact:** No code reads `cardinalities` from a numpy array domain today. A future consumer
   would rely on a false bound.
-- **Status:** Recorded; not fixed. Dropping `cardinalities` from the output descriptor would fix
-  it.
+- **Status:** Fixed on this branch: the output domain has no `cardinalities`. Test:
+  `test_clamp_drops_cardinalities`.
 
 ### F15. `make_np_clamp` clamps rows differently depending on the array's memory layout
 
@@ -345,8 +368,10 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   despite the loop over the whole array, and `d_out ≤ d_in`.
 - **Impact:** Differences are at the level of rounding, and arise only if neighbouring datasets
   could have different layouts.
-- **Status:** Recorded; not fixed. Converting the input with `np.ascontiguousarray` would remove
-  the dependence (on numpy's current behavior).
+- **Status:** Fixed on this branch: the function converts its working array with
+  `np.ascontiguousarray`. The fix relies on numpy's current behaviour. The model assumes it (a
+  summation order per row length), and `clamp_map` and `clamp_stable` hold under that assumption.
+  Test: `test_clamp_layout`.
 
 ### F16. `make_np_clamp` on `float32` data clamps to the `float32` rounding of `norm`
 
@@ -357,7 +382,31 @@ feature, not `idealized-numerics`, so its claims are meant to hold for floats.
   output domain's own check.
 - **Impact:** The bound is exceeded by up to a relative `2^-24`, for ordinary parameters.
   `make_np_sum` and PCA, which use the bound, require `idealized-numerics`.
-- **Status:** Recorded; not fixed.
+- **Status:** Fixed on this branch.
+  - The function clamps to `norm_T`, the largest value of the data type that is at most `norm`
+    (`float(norm_T) > norm` is compared exactly).
+  - The domain's check computes in the precision of the array, and compares with `norm` exactly
+    (as `float64`): numpy would otherwise round `norm` to `float32`.
+  - In the model, the bound is `norm_T`, and passing the check with `norm_T ≤ norm` implies passing
+    it with `norm`.
+  - Test: `test_clamp_f32`.
+
+### F17. `make_np_clamp` changes the data type of its output
+
+- **What:** With `float32` data and an `origin` array (`float64`), `arg - origin` promotes the
+  array to `float64`. With integer data, the division produces floats. In both cases the output
+  is a `float64` array, but the output domain keeps the input's type.
+- **Confirmed:** by running it only:
+  - `float32` data with `origin=[0.5, 0.5]` gives a `float64` output, which is not a member of the
+    output domain;
+  - `int32` data gives `float64` values such as `[[0.6, 0.8]]`.
+- **Impact:** Outputs fail the output domain's type check, so the domain's claim is false. Downstream
+  constructors see an unexpected type.
+- **Status:** Fixed on this branch:
+  - the input domain must have float elements;
+  - `origin` is converted to the data type (and checked to be finite after the conversion), so the
+    arithmetic stays in it. The output domain records the converted origin.
+  - Test: `test_clamp_dtype`.
 
 ## Fragile derivations
 

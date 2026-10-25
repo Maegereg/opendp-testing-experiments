@@ -182,10 +182,15 @@ def array2_domain(
         if T in {"f32", "f64"} and not nan and np.isnan(x).any():
             raise ValueError("must not contain NaN values")
 
-        if origin is not None:
-            x = x - origin
-        if norm is not None and np.linalg.norm(x, ord=p, axis=1).max() > norm:
-            raise ValueError(f"must have row norm at most {norm}")
+        with np.errstate(over="ignore", under="ignore"):
+            if origin is not None:
+                # in the precision of the array, as make_np_clamp computes
+                x = x - (origin.astype(x.dtype) if x.dtype.kind == "f" else origin)
+            # compared exactly: numpy would round norm to the precision of the array
+            if norm is not None and (
+                np.linalg.norm(x, ord=p, axis=1).astype(float) > norm
+            ).any():
+                raise ValueError(f"must have row norm at most {norm}")
         if size is not None and len(x) != size:
             raise ValueError(f"must have exactly {size} rows")
 

@@ -1,8 +1,9 @@
-"""Counterexamples to the contract of `make_np_clamp`, run through the real library.
+"""Counterexamples to the contract of `make_np_clamp`, run through the released opendp package.
 
 F9-F14 are proved in `verification/lean/OpenDPVerification/NpClamp.lean` against a model of the
-numpy operations; this script checks that each one reproduces with numpy and opendp. F15 and F16
-are confirmed only by running them. See FINDINGS.md.
+numpy operations (`clampV0`). This script checks that each one reproduces with numpy and opendp.
+F15-F17 are confirmed only by running them. All are fixed on this branch, and the regression
+tests in `python/test/extras/test_clamp_numpy.py` check the fixes. See FINDINGS.md.
 
     uv run --with opendp --with numpy python -I verification/scripts/np_clamp_counterexamples.py
 
@@ -98,6 +99,10 @@ def main():
     norms = np.linalg.norm(out.astype(np.float64), axis=1)
     print("F16 float32: exact row norms", norms.tolist(), "> 0.1:", bool((norms > 0.1).any()),
           "; output is a member:", member(t, out))
+
+    # F17: float32 data with an origin array comes out as float64
+    t, out = clamp(1.0, 2, [0.5, 0.5], [[3.0, 4.0]], 2, dtype=np.float32)
+    print("F17 dtype: float32 data with an origin gives", out.dtype, "; output is a member:", member(t, out))
 
 
 if __name__ == "__main__":

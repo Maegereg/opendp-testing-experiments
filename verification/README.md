@@ -593,9 +593,10 @@ transcription runs over a model of the numpy operations it uses:
 - `np.linalg.norm` as numpy computes it;
 - a summation order that is fixed but unspecified per row length.
 
-The model and the transcription are trusted (`TRUST.md`).
+The model and the transcription are trusted (`TRUST.md`). F9-F17 were found, and all are fixed
+on this branch. `clamp` models the fixed code, and `clampV0` the code before the fixes.
 
-What is proved (for any binary format, so `float64` and `float32`):
+What is proved about the fixed code (for any binary format, so `float64` and `float32`):
 
 1. **Rows are clamped independently** (`clamp_map`). The loop runs over the whole array until
    every row is within the bound, so a row may be divided more often than it needs. But a row
@@ -605,28 +606,45 @@ What is proved (for any binary format, so `float64` and `float32`):
    farther apart than the inputs under the symmetric distance. This is the claimed map
    `d_in ↦ d_in`.
 3. **No NaN** in the output (`clamp_no_nan`).
-4. **The output domain's norm check**, with origin zero and `norm` below the largest float
-   (`clamp_member_zero_origin`).
-5. **Termination** (`clamp_terminates`), when `norm` is a normal float, and for `p = 1` also
-   `norm ≥ d · 2^-1022`. Each pass shrinks a normal element of every row above the bound by at
-   least one representable step (`abs_rne_div_lt`, `factor_ge`), and a row of subnormals is
-   within such a bound.
+4. **The output domain's norm check** holds for every output row, for any origin
+   (`clamp_member`).
+5. **Termination** (`clamp_terminates`), on every dataset, the empty one included (`clamp_empty`).
+   - The hypotheses are that `norm` is a normal float, and for `p = 1` also `norm ≥ d · 2^-1022`.
+   - Each pass shrinks a normal element of every row above the bound by at least one
+     representable step (`abs_rne_div_lt`, `factor_ge`), and a row of subnormals is within such a
+     bound.
+   - The minimum norm implies the hypotheses (`TermHyp.of_min`, `min_norm_f64`, `min_norm_f32`).
+6. **True norms**, with origin zero (`clamp_true_norm`). The loop bounds the norms numpy computes.
+   The true norms exceed `norm` by at most a relative rounding error:
+   - for `p = 1`, `(1 - 2^-p)^-(n-1)` (`l1_true_norm`);
+   - for `p = 2`, about `(n/2 + 2) 2^-p` (`l2_true_norm`, `slack_le`). Squares that underflow are
+     negligible above the minimum norm.
 
-Found and proved (counterexamples in Lean), all recorded and not fixed:
-- F9: `arg + origin` rounds, so outputs can lie outside the ball (`origin_rounding`).
-- F10: squares underflow in the L2 norm, so tiny bounds miss rows (`l2_underflow`).
-- F11: the loop can run forever, for `norm` below `d · 2^-1022` with `p = 1`
-  (`nonterm_subnormal`, `nonterm_normal`).
-- F12: `norm` equal to the largest float accepts rows of infinite norm (`max_bound_overflow`).
-- F13: the empty dataset raises, revealing emptiness (`empty_error`).
-- F14: the output domain keeps `cardinalities` that clamping invalidates (`cardinalities`).
+Found and fixed (counterexamples F9-F14 proved in Lean against the code before the fixes):
 
-Found by running it only:
-- F15: row norms depend on the array's memory layout.
-- F16: `float32` data is clamped to `float32(norm)`, which can exceed `norm`.
+| | Bug | Fix |
+| --- | --- | --- |
+| F9 | `arg + origin` rounds, so outputs can lie outside the ball (`origin_rounding`) | rows that fail the domain's check after adding `origin` back are replaced by `origin` |
+| F10 | squares underflow in the L2 norm, so tiny bounds miss rows (`l2_underflow`) | `norm ≥ 2^-458` (`float64`) / `2^-39` (`float32`) |
+| F11 | the loop can run forever for small bounds (`nonterm_subnormal`, `nonterm_normal`) | the same minimum norm |
+| F12 | with `norm` the largest float, rows of infinite norm pass (`max_bound_overflow`) | the recheck of F9 |
+| F13 | the empty dataset raises, revealing emptiness (`empty_error`) | loop on `.any()`; the domain's check also accepts empty arrays |
+| F14 | the output domain keeps `cardinalities` that clamping invalidates (`cardinalities`) | dropped from the output domain |
+| F15 | row norms depend on the array's memory layout (by running it) | `np.ascontiguousarray` |
+| F16 | `float32` data is clamped to `float32(norm)`, which can exceed `norm` (by running it) | clamp to the largest `float32` at most `norm`; the domain's check compares exactly |
+| F17 | the output's type changes: `float32` data with an `origin` array, or integer data (by running it) | float elements only; `origin` converted to the data type |
 
-All eight reproduce with numpy 2.5 and the opendp package, whose `make_np_clamp` and
-`array2_domain` are identical to this branch's:
+Each fix has a regression test in `python/test/extras/test_clamp_numpy.py`. Each new test fails on
+the code before the fixes, and the existing numpy tests (clamp, mean, sum, PCA, eigenvectors,
+domains) pass. They run against the branch's FFI build:
+
+```sh
+cd rust && cargo build --features untrusted,ffi --lib && cd ../python
+PYTHONPATH=src uv run --no-project --with numpy --with pytest --with scikit-learn \
+  --with randomgen --with deprecated python -m pytest test/extras/test_clamp_numpy.py
+```
+
+The counterexamples reproduce against the released opendp package (numpy 2.5):
 
 ```sh
 uv run --with opendp --with numpy python -I verification/scripts/np_clamp_counterexamples.py
@@ -638,12 +656,24 @@ Mutation checks: each of the following makes the Lean build fail:
 - `max(factor, 1)` replaced by `factor` (rows within the bound are rescaled): `body_eq_self`
   fails;
 - looping while a norm is at least the bound, rather than above it (a row exactly at the bound
-  would never change): `body_eq_self`, `factor_ge` and the termination proof fail.
+  would never change): `body_eq_self`, `factor_ge` and the termination proof fail;
+- a recheck that does not replace rows outside the ball: `clamp_member` fails;
+- a `float64` minimum norm of `2^-459`: `min_norm_f64` fails.
 
 `nonterm_subnormal` and `nonterm_normal` show that the conditions of `clamp_terminates` are
 needed: without them the theorem is false.
 
-No code changes.
+Code changes (Python):
+- `make_np_clamp`:
+  - minimum norm, float elements only;
+  - `norm_T`;
+  - `origin` in the data type;
+  - C order;
+  - the loop on `.any()`;
+  - the recheck with replacement by `origin`;
+  - no `cardinalities` in the output domain.
+- `array2_domain`'s check computes in the precision of the array, compares with `norm` exactly,
+  and accepts empty arrays.
 
 ## Status: `make_laplace` (phases 1 and 2: deterministic code, mechanism theorem)
 

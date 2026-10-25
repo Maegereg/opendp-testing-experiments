@@ -10,7 +10,8 @@ of radius `norm` around `origin`, and claims:
 ## The model
 
 `_function` is transcribed by hand below (`clamp`), against a model of the numpy operations it
-uses. The model is trusted:
+uses. `clampV0` transcribes the code before the fixes (F9-F17), and the counterexamples are about
+it. The model is trusted:
 * Element-wise operations (`-`, `+`, `*`, `/`, `np.sqrt`, `np.abs`, `np.maximum`,
   `np.nan_to_num`) on `float64` (or `float32`) arrays are IEEE 754 operations, rounding to
   nearest, ties to even (`Fmt.rne`), on each element (`F64`, with infinities and NaN).
@@ -18,22 +19,27 @@ uses. The model is trusted:
 * `np.linalg.norm(x, ord=p, axis=1)` is `add.reduce(abs(x), axis=1)` (`p = 1`) or
   `sqrt(add.reduce(x * x, axis=1))` (`p = 2`) (numpy's `linalg/_linalg.py`), and
   `add.reduce` adds the elements of each row along a binary tree that depends only on the row
-  length (`Plan`): numpy's pairwise summation is such a tree. This holds for C-ordered arrays;
-  for Fortran-ordered arrays numpy sums in a different order, so the same row can get a
-  different norm (observed with numpy 2.5).
-* `current_norm.max()` raises on an empty array (`ValueError: zero-size array to reduction
-  operation maximum which has no identity`).
+  length (`Plan`): numpy's pairwise summation is such a tree. This holds for C-ordered arrays,
+  which the fixed code ensures (`np.ascontiguousarray`); for Fortran-ordered arrays numpy sums in
+  a different order (F15).
+* Before the fixes, `current_norm.max()` raised on an empty array (`clampV0`).
+* One format: the data, `origin` (cast to the data type) and the bound `norm_T` (the largest value
+  of the data type at most `norm`) are in the same format. The domain's check compares with `norm`
+  exactly, so passing it with `norm_T ≤ norm` (`memberNorm`) implies passing it with `norm`.
 
 ## Results
 
-* Positive: `clamp_map` (each output row depends only on its input row, despite the loop over
-  the whole array), `clamp_stable` (`d_out ≤ d_in`), `clamp_no_nan`, `clamp_member_zero_origin`
-  (with origin zero, outputs pass the domain's norm check), and `clamp_terminates` (the loop
-  terminates when `norm` is a normal float, and for `p = 1` at least `d` times the smallest
-  normal float).
-* Counterexamples (`verification/FINDINGS.md`), each a concrete input run through the model:
-  `origin_rounding` (F9), `l2_underflow` (F10), `nonterm_subnormal` and `nonterm_normal` (F11),
-  `max_bound_overflow` (F12), `empty_error` (F13), `cardinalities` (F14).
+* Positive, for the fixed code: `clamp_map` (each output row depends only on its input row,
+  despite the loop over the whole array), `clamp_stable` (`d_out ≤ d_in`), `clamp_no_nan`,
+  `clamp_member` (every output row passes the domain's norm check, for any origin),
+  `clamp_empty`, `clamp_terminates` (the loop terminates when `norm` is a normal float, and for
+  `p = 1` at least `d` times the smallest normal float; `TermHyp.of_min`, `min_norm_f64`,
+  `min_norm_f32`: implied by `make_np_clamp`'s minimum norm), and `clamp_true_norm` (with origin
+  zero, the true norms of output rows exceed the bound by at most rounding error).
+* Counterexamples for the code before the fixes (`verification/FINDINGS.md`), each a concrete
+  input run through the model: `origin_rounding` (F9), `l2_underflow` (F10), `nonterm_subnormal`
+  and `nonterm_normal` (F11), `max_bound_overflow` (F12), `empty_error` (F13),
+  `cardinalities` (F14).
 -/
 import OpenDPVerification.Float.Overflow
 import OpenDPVerification.Float.Saturating
@@ -196,7 +202,21 @@ noncomputable def pre (row : List F64) : List ℝ :=
   List.zipWith (fun a o => nanToNum φ (F64.subR φ a o)) row C.origin
 
 /-- `arg + origin` for a row. -/
-noncomputable def post (r : List ℝ) : List F64 := List.zipWith (fun a o => F64.round φ (a + o)) r C.origin
+noncomputable def postV0 (r : List ℝ) : List F64 :=
+  List.zipWith (fun a o => F64.round φ (a + o)) r C.origin
+
+/-- The domain's norm check rejects a row: `np.linalg.norm(row - origin, ord=p) > norm`. -/
+def outside (row : List F64) : Prop :=
+  (rowNorm φ C.P C.ord (List.zipWith (F64.subR φ) row C.origin)).gt C.bound
+
+/-- The domain's norm check accepts a row. -/
+def memberNorm (row : List F64) : Prop := ¬ C.outside row
+
+open Classical in
+/-- `out = arg + origin` for a row, replaced by `origin` when the norm check rejects it:
+`out[outside] = origin`. -/
+noncomputable def post (r : List ℝ) : List F64 :=
+  if C.outside (C.postV0 r) then C.origin.map fin else C.postV0 r
 
 /-- The outcome of `_function`: an output, an exception, or no termination (within the fuel). -/
 inductive Res where
@@ -204,16 +224,19 @@ inductive Res where
   | error
   | diverge
 
-/-- `_function(x)`, with fuel for the loop. -/
-noncomputable def clamp (n : ℕ) (x : List (List F64)) : Res :=
+/-- `_function(x)` before the fixes, with fuel for the loop: it raised on the empty dataset and
+returned `arg + origin` unchecked. The counterexamples F9-F14 are about it. -/
+noncomputable def clampV0 (n : ℕ) (x : List (List F64)) : Res :=
   if x = [] then .error
   else match C.loop n (x.map C.pre) with
-    | some rows => .ok (rows.map C.post)
+    | some rows => .ok (rows.map C.postV0)
     | none => .diverge
 
-/-- The domain's norm check on an output row: `np.linalg.norm(row - origin, ord=p) > norm` fails. -/
-def memberNorm (row : List F64) : Prop :=
-  ¬ (rowNorm φ C.P C.ord (List.zipWith (F64.subR φ) row C.origin)).gt C.bound
+/-- `_function(x)`, with fuel for the loop. -/
+noncomputable def clamp (n : ℕ) (x : List (List F64)) : Res :=
+  match C.loop n (x.map C.pre) with
+    | some rows => .ok (rows.map C.post)
+    | none => .diverge
 
 end Clamp
 
@@ -527,7 +550,6 @@ row is within the bound, each output row depends only on the corresponding input
 theorem clamp_map (hb : 0 < C.bound) {n : ℕ} {x out : List (List F64)}
     (h : C.clamp n x = .ok out) : out = x.map (fun row => C.post (C.res (C.pre row))) := by
   unfold clamp at h
-  split_ifs at h
   split at h
   · rename_i rows hl
     cases h
@@ -588,14 +610,17 @@ theorem mem_zipWith_round {r : List ℝ} {os : List ℝ} {v : F64}
 theorem clamp_no_nan {n : ℕ} {x out : List (List F64)} (h : C.clamp n x = .ok out) :
     ∀ row ∈ out, ∀ v ∈ row, v ≠ nan := by
   unfold clamp at h
-  split_ifs at h
   split at h
   · cases h
     simp only [List.mem_map]
     rintro _ ⟨r, _, rfl⟩ v hv
-    obtain ⟨y, rfl⟩ := mem_zipWith_round (φ := φ) hv
-    unfold F64.round
-    split_ifs <;> simp
+    unfold post at hv
+    split_ifs at hv
+    · obtain ⟨o, _, rfl⟩ := List.mem_map.mp hv
+      simp
+    · obtain ⟨y, rfl⟩ := mem_zipWith_round (φ := φ) hv
+      unfold F64.round
+      split_ifs <;> simp
   · cases h
 
 theorem zipWith_zeros {α : Type*} (f : α → ℝ → F64) {r : List α} {d : ℕ} (hd : r.length ≤ d) :
@@ -608,51 +633,6 @@ theorem zipWith_zeros {α : Type*} (f : α → ℝ → F64) {r : List α} {d : �
     | succ d =>
       simp only [List.replicate_succ, List.zipWith_cons_cons, List.map_cons]
       rw [ih (by simp at hd; omega)]
-
-/-- **The norm check, with origin zero.** With a zero origin (`origin=None`), every output row
-passes the output domain's check `np.linalg.norm(row - origin, ord=p) ≤ norm`, provided the bound
-is below the largest finite float (`clamp_max_bound_overflow` shows that it can fail at it). -/
-theorem clamp_member_zero_origin {d : ℕ} (hO : C.origin = List.replicate d 0)
-    (hmax : C.bound < φ.maxFinite) {n : ℕ} {x out : List (List F64)}
-    (h : C.clamp n x = .ok out) : ∀ row ∈ out, C.memberNorm row := by
-  unfold clamp at h
-  split_ifs at h
-  split at h
-  · rename_i rows hl
-    cases h
-    obtain ⟨N, rfl, habove⟩ := C.loop_spec hl
-    simp only [List.mem_map]
-    rintro _ ⟨_, ⟨_, ⟨row, hrow, rfl⟩, rfl⟩, rfl⟩
-    have hok := C.iterate_ok (C.pre_ok row) N
-    have hlen : (C.body^[N] (C.pre row)).length ≤ d := by
-      have : ∀ M (s : List ℝ), (C.body^[M] s).length = s.length := by
-        intro M; induction M with
-        | zero => intro s; rfl
-        | succ M ih => intro s; rw [Function.iterate_succ_apply, ih]; simp [body]
-      rw [this, pre, List.length_zipWith, hO, List.length_replicate]; omega
-    set s := C.body^[N] (C.pre row)
-    have hpost : C.post s = s.map fin := by
-      rw [post, hO, zipWith_zeros _ hlen]
-      apply List.map_congr_left
-      intro a ha; simp only [add_zero]; exact round_of_ok (hok a ha)
-    have hsub : List.zipWith (F64.subR φ) (s.map fin) C.origin = s.map fin := by
-      rw [hO, zipWith_zeros _ (by simpa using hlen), List.map_map]
-      apply List.map_congr_left
-      intro a ha; simp only [Function.comp, F64.subR, sub_zero]; exact round_of_ok (hok a ha)
-    have hna := habove s (List.mem_map.mpr ⟨_, List.mem_map.mpr ⟨row, hrow, rfl⟩, rfl⟩)
-    have hnn := rowNorm_nn (φ := φ) (P := C.P) (o := C.ord) hok
-    unfold memberNorm
-    rw [hpost, hsub]
-    unfold above cur at hna
-    generalize rowNorm φ C.P C.ord (s.map fin) = v at hna hnn
-    match v with
-    | fin c => exact hna
-    | inf b =>
-      simp only [NN] at hnn; subst hnn
-      simp only [nanToNum] at hna
-      exact absurd hmax (not_lt.mpr (not_lt.mp hna))
-    | nan => exact hnn.elim
-  · cases h
 
 end Clamp
 
@@ -842,7 +822,7 @@ are 16 apart). The output row is 16 from the origin, so it fails the output doma
 (`p = 2`; the one-column case is the same for `p = 1`). -/
 theorem origin_rounding (P : Plan) :
     let C : Clamp binary64 := ⟨P, .l2, 12, [2 ^ 56]⟩
-    C.clamp 2 [[fin (2 ^ 56 + 48)]] = .ok [[fin (2 ^ 56 + 16)]] ∧
+    C.clampV0 2 [[fin (2 ^ 56 + 48)]] = .ok [[fin (2 ^ 56 + 16)]] ∧
       ¬ C.memberNorm [fin (2 ^ 56 + 16)] := by
   intro C
   have o48 := ok64_int 48 (by norm_num)
@@ -889,9 +869,9 @@ theorem origin_rounding (P : Plan) :
       simp only [List.mem_singleton, exists_eq_left, Clamp.above, hc12, C]; norm_num
     simp only [Clamp.loop, a1, ite_true, List.map_cons, List.map_nil, hbody, a2, ite_false]
   refine ⟨?_, ?_⟩
-  · simp only [Clamp.clamp, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre, hloop,
-      Clamp.post, C, List.zipWith_cons_cons, List.zipWith_nil_left, hpost]
-  · simp only [Clamp.memberNorm, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
+  · simp only [Clamp.clampV0, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre, hloop,
+      Clamp.postV0, C, List.zipWith_cons_cons, List.zipWith_nil_left, hpost]
+  · simp only [Clamp.memberNorm, Clamp.outside, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
       show (2 : ℝ) ^ 56 + 16 - 2 ^ 56 = 16 by ring, round_of_ok o16, n16, F64.gt, not_not]
     norm_num
 
@@ -939,7 +919,7 @@ and is output unchanged. It passes the domain's (equally affected) check, but it
 `2^-565` exceeds the bound. -/
 theorem l2_underflow (P : Plan) :
     let C : Clamp binary64 := ⟨P, .l2, 2 ^ (-600 : ℤ), [0, 0]⟩
-    C.clamp 0 [[fin (2 ^ (-565 : ℤ)), fin 0]] = .ok [[fin (2 ^ (-565 : ℤ)), fin 0]] ∧
+    C.clampV0 0 [[fin (2 ^ (-565 : ℤ)), fin 0]] = .ok [[fin (2 ^ (-565 : ℤ)), fin 0]] ∧
       C.memberNorm [fin (2 ^ (-565 : ℤ)), fin 0] ∧
       C.bound < Real.sqrt ((2 ^ (-565 : ℤ)) ^ 2 + 0 ^ 2) := by
   intro C
@@ -964,10 +944,10 @@ theorem l2_underflow (P : Plan) :
       List.map_nil, C, hnorm, nanToNum, not_lt]
     positivity
   refine ⟨?_, ?_, ?_⟩
-  · simp only [Clamp.clamp, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
-      Clamp.loop, hna, ite_false, Clamp.post, C, List.zipWith_cons_cons, List.zipWith_nil_left,
+  · simp only [Clamp.clampV0, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
+      Clamp.loop, hna, ite_false, Clamp.postV0, C, List.zipWith_cons_cons, List.zipWith_nil_left,
       add_zero, round_of_ok oa, round_of_ok ok_zero]
-  · simp only [Clamp.memberNorm, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
+  · simp only [Clamp.memberNorm, Clamp.outside, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
       sub_zero, round_of_ok oa, round_of_ok ok_zero, hnorm, F64.gt, not_lt]
     positivity
   · simp only [C]
@@ -979,7 +959,7 @@ the same element. With `p = 1` and `norm = 3 · 2^-1074` (three times the smalle
 row of four smallest subnormals has norm `4 · 2^-1074`, its factor rounds to a value in
 `[1, 3/2]`, and dividing `2^-1074` by it rounds back to `2^-1074`: the loop never ends. -/
 theorem nonterm_subnormal (P : Plan) (n : ℕ) :
-    (⟨P, .l1, 3 * 2 ^ (-1074 : ℤ), [0, 0, 0, 0]⟩ : Clamp binary64).clamp n
+    (⟨P, .l1, 3 * 2 ^ (-1074 : ℤ), [0, 0, 0, 0]⟩ : Clamp binary64).clampV0 n
       [[fin (2 ^ (-1074 : ℤ)), fin (2 ^ (-1074 : ℤ)), fin (2 ^ (-1074 : ℤ)), fin (2 ^ (-1074 : ℤ))]]
       = .diverge := by
   set t : ℝ := 2 ^ (-1074 : ℤ) with htdef
@@ -1026,7 +1006,7 @@ theorem nonterm_subnormal (P : Plan) (n : ℕ) :
   have habove : ∃ r ∈ [[t, t, t, t]], C.above r :=
     ⟨_, List.mem_singleton_self _, by simp only [Clamp.above, hcur, C]; linarith⟩
   have hloop := loop_stuck C habove (by simp [hbody]) n
-  unfold Clamp.clamp
+  unfold Clamp.clampV0
   rw [ite_eq_right (by simp), List.map_singleton, hpre, hloop]
 
 /-- Dividing `k t` by a factor `f` close to 1 moves it by less than half of `t`. -/
@@ -1043,7 +1023,7 @@ is not enough: with `norm = 2^-1022` (the smallest normal float), the row
 `[A t, A t, 3 t]` (`t = 2^-1074`, `A = 2^51 - 1`) has norm `(2^52 + 1) t`, just above the bound;
 its factor is `1 + 2^-52`, and dividing each element by it rounds back to the element. -/
 theorem nonterm_normal (P : Plan) (n : ℕ) :
-    (⟨P, .l1, 2 ^ (-1022 : ℤ), [0, 0, 0]⟩ : Clamp binary64).clamp n
+    (⟨P, .l1, 2 ^ (-1022 : ℤ), [0, 0, 0]⟩ : Clamp binary64).clampV0 n
       [[fin (2251799813685247 * 2 ^ (-1074 : ℤ)), fin (2251799813685247 * 2 ^ (-1074 : ℤ)),
         fin (3 * 2 ^ (-1074 : ℤ))]] = .diverge := by
   set t : ℝ := 2 ^ (-1074 : ℤ) with htdef
@@ -1101,7 +1081,7 @@ theorem nonterm_normal (P : Plan) (n : ℕ) :
   have habove : ∃ r ∈ [[(A : ℝ) * t, A * t, 3 * t]], C.above r :=
     ⟨_, List.mem_singleton_self _, by simp only [Clamp.above, hcur, hb]; linarith⟩
   have hloop := loop_stuck C habove (by simp [hbody]) n
-  unfold Clamp.clamp
+  unfold Clamp.clampV0
   rw [ite_eq_right (by simp), List.map_singleton, ← hAr, hpre, hloop]
 
 /-- **F12 (overflow at the largest bound).** With `norm` the largest finite float and `p = 1`,
@@ -1109,7 +1089,7 @@ the row `[max, max]` has norm `+inf`, which `nan_to_num` turns into `max`: the l
 as within the bound and outputs it unchanged, but the domain's check computes the norm `+inf`. -/
 theorem max_bound_overflow (φ : Fmt) (P : Plan) :
     let C : Clamp φ := ⟨P, .l1, φ.maxFinite, [0, 0]⟩
-    C.clamp 0 [[fin φ.maxFinite, fin φ.maxFinite]] = .ok [[fin φ.maxFinite, fin φ.maxFinite]] ∧
+    C.clampV0 0 [[fin φ.maxFinite, fin φ.maxFinite]] = .ok [[fin φ.maxFinite, fin φ.maxFinite]] ∧
       ¬ C.memberNorm [fin φ.maxFinite, fin φ.maxFinite] := by
   intro C
   have hM := Fmt.maxFinite_pos (φ := φ)
@@ -1136,19 +1116,19 @@ theorem max_bound_overflow (φ : Fmt) (P : Plan) :
     simp only [List.mem_singleton, exists_eq_left, Clamp.above, Clamp.cur, List.map_cons,
       List.map_nil, C, hnorm, nanToNum, lt_irrefl, not_false_eq_true]
   refine ⟨?_, ?_⟩
-  · simp only [Clamp.clamp, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
-      Clamp.loop, hna, ite_false, Clamp.post, C, List.zipWith_cons_cons, List.zipWith_nil_left,
+  · simp only [Clamp.clampV0, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
+      Clamp.loop, hna, ite_false, Clamp.postV0, C, List.zipWith_cons_cons, List.zipWith_nil_left,
       add_zero, round_of_ok ok_max]
-  · simp only [Clamp.memberNorm, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
+  · simp only [Clamp.memberNorm, Clamp.outside, C, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR,
       sub_zero, round_of_ok ok_max, hnorm, F64.gt, not_true_eq_false, not_false_eq_true]
 
 /-- **F13 (empty input).** `current_norm.max()` raises on an empty array, so `_function` raises on
 the empty dataset, and returns on its neighbour with one row of zeros (at symmetric distance 1):
 whether the dataset is empty is revealed exactly. -/
 theorem empty_error {φ : Fmt} (C : Clamp φ) (hO : C.origin = [0]) (hb : 0 < C.bound) (n : ℕ) :
-    C.clamp n [] = .error ∧ C.clamp 0 [[fin 0]] = .ok [[fin 0]] ∧
+    C.clampV0 n [] = .error ∧ C.clampV0 0 [[fin 0]] = .ok [[fin 0]] ∧
       symDist ([] : List (List F64)) [[fin 0]] = 1 := by
-  refine ⟨by simp [Clamp.clamp], ?_, by simp [symDist]⟩
+  refine ⟨by simp [Clamp.clampV0], ?_, by simp [symDist]⟩
   have hpre : C.pre [fin 0] = [0] := by
     simp only [Clamp.pre, hO, List.zipWith_cons_cons, List.zipWith_nil_left, F64.subR, sub_zero,
       round_of_ok ok_zero, nanToNum]
@@ -1156,8 +1136,8 @@ theorem empty_error {φ : Fmt} (C : Clamp φ) (hO : C.origin = [0]) (hb : 0 < C.
     simp only [List.mem_singleton, exists_eq_left, Clamp.above, Clamp.cur, List.map_cons,
       List.map_nil, rowNorm_zeros C.P C.ord [fin 0] (by simp), nanToNum, not_lt]
     exact hb.le
-  simp only [Clamp.clamp, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
-    Clamp.loop, hna, ite_false, Clamp.post, hO, List.zipWith_cons_cons, List.zipWith_nil_left,
+  simp only [Clamp.clampV0, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre,
+    Clamp.loop, hna, ite_false, Clamp.postV0, hO, List.zipWith_cons_cons, List.zipWith_nil_left,
     add_zero, round_of_ok ok_zero]
 
 /-- **F14 (cardinalities).** The output domain keeps the input domain's `cardinalities`, but
@@ -1166,7 +1146,7 @@ clamping can increase the number of distinct values in a column: with `p = 1` an
 `[[1, 0], [1/2, 1/2]]` (two). -/
 theorem cardinalities (P : Plan) :
     let C : Clamp binary64 := ⟨P, .l1, 1, [0, 0]⟩
-    C.clamp 1 [[fin 2, fin 0], [fin 2, fin 2]] = .ok [[fin 1, fin 0], [fin (1 / 2), fin (1 / 2)]] := by
+    C.clampV0 1 [[fin 2, fin 0], [fin 2, fin 2]] = .ok [[fin 1, fin 0], [fin (1 / 2), fin (1 / 2)]] := by
   intro C
   have o1 := ok64_int 1 (by norm_num)
   have o2 := ok64_int 2 (by norm_num)
@@ -1212,8 +1192,8 @@ theorem cardinalities (P : Plan) :
   have hna : ¬ ∃ r ∈ [[(1 : ℝ), 0], [1 / 2, 1 / 2]], C.above r := by
     simp only [List.mem_cons, List.mem_nil_iff, or_false, exists_eq_or_imp, exists_eq_left,
       Clamp.above, c10, chh, C]; norm_num
-  simp only [Clamp.clamp, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre1, hpre2,
-    Clamp.loop, ha, ite_true, b20, b22, hna, ite_false, Clamp.post, C, List.zipWith_cons_cons,
+  simp only [Clamp.clampV0, List.cons_ne_nil, ite_false, List.map_cons, List.map_nil, hpre1, hpre2,
+    Clamp.loop, ha, ite_true, b20, b22, hna, ite_false, Clamp.postV0, C, List.zipWith_cons_cons,
     List.zipWith_nil_left, add_zero, round_of_ok o1, round_of_ok ok_zero, round_of_ok oh]
 
 end Counterexamples
@@ -1611,14 +1591,485 @@ theorem loop_terminates {C : Clamp φ} (H : TermHyp C) :
 /-- **Termination.** When `norm` is a normal float, and for `p = 1` at least `d · 2^emin` with
 `d ≤ 2^p` columns (`d` the length of `origin`), `_function` returns on every non-empty dataset.
 `nonterm_subnormal` and `nonterm_normal` show that neither condition can be dropped. -/
-theorem clamp_terminates {C : Clamp φ} (H : TermHyp C) {x : List (List F64)} (hx : x ≠ []) :
+theorem clamp_terminates {C : Clamp φ} (H : TermHyp C) (x : List (List F64)) :
     ∃ n out, C.clamp n x = .ok out := by
   obtain ⟨out, hout⟩ := loop_terminates H _ (x.map C.pre) (by
     simp only [List.mem_map]
     rintro _ ⟨row, _, rfl⟩
     exact ⟨C.pre_ok row, by simp only [Clamp.pre, List.length_zipWith]; omega⟩) le_rfl
-  exact ⟨measure φ (x.map C.pre), out.map C.post, by simp only [Clamp.clamp, hx, ite_false, hout]⟩
+  exact ⟨measure φ (x.map C.pre), out.map C.post, by simp only [Clamp.clamp, hout]⟩
 
 end Termination
+
+
+/-! ## The fixed code -/
+
+section Fixed
+
+variable {φ : Fmt}
+
+theorem zipWith_subR_self (os : List ℝ) :
+    List.zipWith (F64.subR φ) (os.map fin) os = os.map fun _ => fin 0 := by
+  induction os with
+  | nil => rfl
+  | cons o os ih =>
+    simp only [List.map_cons, List.zipWith_cons_cons, ih, F64.subR, sub_self, round_of_ok ok_zero]
+
+namespace Clamp
+
+variable (C : Clamp φ)
+
+/-- **The norm check (F9, F12, F16).** Every output row passes the output domain's norm check,
+for any origin: rows that rounding leaves outside the ball are replaced by `origin`, which is at
+norm 0 from itself. -/
+theorem clamp_member (hb : 0 ≤ C.bound) {n : ℕ} {x out : List (List F64)}
+    (h : C.clamp n x = .ok out) : ∀ row ∈ out, C.memberNorm row := by
+  unfold clamp at h
+  split at h
+  · cases h
+    simp only [List.mem_map]
+    rintro _ ⟨r, _, rfl⟩
+    unfold post
+    split_ifs with ho
+    · unfold memberNorm outside
+      rw [zipWith_subR_self, rowNorm_zeros C.P C.ord _ (by simp)]
+      simp only [F64.gt, not_lt]; exact hb
+    · exact ho
+  · cases h
+
+/-- **The empty dataset (F13)** is clamped to the empty dataset. -/
+theorem clamp_empty (n : ℕ) : C.clamp n [] = .ok [] := by
+  cases n <;> simp [clamp, loop]
+
+end Clamp
+
+/-- The hypotheses of termination follow from a lower bound `2^(emin + p)` on `norm`, which
+`make_np_clamp`'s minimum norm (`2^-458` for `f64`, `2^-39` for `f32`) exceeds. -/
+theorem TermHyp.of_min {C : Clamp φ} (hφ : φ.p + 1 < φ.emax) (hrep : φ.IsRep C.bound)
+    (hmin : (2 : ℝ) ^ (emin φ + φ.p) ≤ C.bound) (hd : C.origin.length ≤ 2 ^ φ.p) : TermHyp C := by
+  have h2 : (2 : ℝ) ^ (emin φ + φ.p) = 2 ^ φ.p * 2 ^ emin φ := by
+    rw [zpow_add₀ (by norm_num), zpow_natCast, mul_comm]
+  refine ⟨hφ, hrep, le_trans (zpow_le_zpow_right₀ (by norm_num) (by omega)) hmin, fun _ => ⟨?_, hd⟩⟩
+  calc (C.origin.length : ℝ) * 2 ^ emin φ ≤ 2 ^ φ.p * 2 ^ emin φ :=
+        mul_le_mul_of_nonneg_right (by exact_mod_cast hd) (Fmt.two_zpow_pos _).le
+    _ = _ := h2.symm
+    _ ≤ _ := hmin
+
+/-! ### True norms (F10)
+
+The loop bounds the norms numpy computes. The true norms exceed them by rounding errors: a
+relative error `u = 2^-p` per operation, and, for `p = 2`, an absolute error `η = 2^qmin / 2` per
+square that underflows. -/
+
+/-- The rounding error is at most `2^-p` relative, plus half the smallest subnormal. -/
+theorem rne_err (z : ℝ) : |φ.rne z - z| ≤ 2 ^ (-(φ.p : ℤ)) * |z| + 2 ^ φ.qmin / 2 := by
+  have hp := Fmt.two_zpow_pos (-(φ.p : ℤ))
+  have hη := Fmt.two_zpow_pos φ.qmin
+  rcases eq_or_ne z 0 with h0 | h0
+  · rw [h0, Fmt.rne_zero]; simp only [sub_zero, abs_zero, mul_zero, zero_add]; positivity
+  have hq := Fmt.two_zpow_pos (φ.fexp z)
+  have herr : |φ.rne z - z| ≤ 2 ^ φ.fexp z / 2 := by
+    have key : φ.rne z - z =
+        -((z / 2 ^ φ.fexp z - roundEven (z / 2 ^ φ.fexp z)) * 2 ^ φ.fexp z) := by
+      unfold Fmt.rne; field_simp; ring
+    rw [key, abs_neg, abs_mul, abs_of_pos hq]
+    have := roundEven_half (z / 2 ^ φ.fexp z)
+    nlinarith
+  by_cases hn : φ.qmin ≤ Int.log 2 |z| - φ.p + 1
+  · have hf : φ.fexp z = Int.log 2 |z| - φ.p + 1 := max_eq_left hn
+    have hlog : (2 : ℝ) ^ Int.log 2 |z| ≤ |z| := Int.zpow_log_le_self (by norm_num) (abs_pos.mpr h0)
+    have : (2 : ℝ) ^ φ.fexp z / 2 = 2 ^ Int.log 2 |z| * 2 ^ (-(φ.p : ℤ)) := by
+      rw [hf, ← zpow_add₀ (by norm_num), div_eq_iff (by norm_num), ← zpow_add_one₀ (by norm_num)]
+      ring_nf
+    rw [this] at herr
+    nlinarith
+  · have hf : φ.fexp z = φ.qmin := max_eq_right (by unfold Fmt.fexp at *; omega)
+    rw [hf] at herr
+    nlinarith [abs_nonneg z]
+
+theorem round_eq_fin {x c : ℝ} (h : F64.round φ x = fin c) : c = φ.rne x := by
+  unfold F64.round at h
+  split_ifs at h
+  cases h; rfl
+
+/-- A summation tree with an infinite leaf sums to infinity. -/
+theorem eval_inf {xs : List F64} (hx : ∀ v ∈ xs, NN φ v) {i : ℕ}
+    (hi : xs.getD i (fin 0) = inf false) (t : STree) (ht : i ∈ t.leaves) :
+    t.eval φ xs = inf false := by
+  induction t with
+  | leaf j =>
+    simp only [STree.leaves, List.mem_singleton] at ht
+    subst ht; exact hi
+  | node l r ihl ihr =>
+    simp only [STree.leaves, List.mem_append] at ht
+    have hl := eval_nn hx l
+    have hr := eval_nn hx r
+    simp only [STree.eval]
+    rcases ht with ht | ht
+    · rw [ihl ht]
+      generalize r.eval φ xs = v at hr
+      match v with
+      | fin _ => rfl
+      | inf b => simp only [NN] at hr; subst hr; simp [F64.add]
+      | nan => exact hr.elim
+    · rw [ihr ht]
+      generalize l.eval φ xs = v at hl
+      match v with
+      | fin _ => rfl
+      | inf b => simp only [NN] at hl; subst hl; simp [F64.add]
+      | nan => exact hl.elim
+
+theorem getD_nn {xs : List F64} (hx : ∀ v ∈ xs, NN φ v) (i : ℕ) : NN φ (xs.getD i (fin 0)) := by
+  simp only [List.getD_eq_getElem?_getD]
+  cases hi : xs[i]? with
+  | none => exact ⟨ok_zero, le_rfl⟩
+  | some v => exact hx v (List.mem_of_getElem? hi)
+
+/-- A summation tree loses at most a relative `2^-p` per addition: its leaves sum to at most
+`c / (1 - 2^-p)^(#leaves - 1)`. -/
+theorem eval_lower {xs : List F64} (hx : ∀ v ∈ xs, NN φ v) (t : STree) {c : ℝ}
+    (h : t.eval φ xs = fin c) :
+    (t.leaves.map fun i => nanToNum φ (xs.getD i (fin 0))).sum
+      * (1 - 2 ^ (-(φ.p : ℤ))) ^ (t.leaves.length - 1) ≤ c := by
+  have hu : (2 : ℝ) ^ (-(φ.p : ℤ)) ≤ 1 / 4 := by
+    have := Fmt.two_pow_p_ge (φ := φ)
+    rw [zpow_neg, zpow_natCast]
+    rw [inv_le_comm₀ (by positivity) (by norm_num)]; linarith
+  have hu0 := Fmt.two_zpow_pos (-(φ.p : ℤ))
+  set W := 1 - (2 : ℝ) ^ (-(φ.p : ℤ)) with hW
+  have hW0 : 0 ≤ W := by linarith
+  have hW1 : W ≤ 1 := by linarith
+  have hsum0 : ∀ t : STree, 0 ≤ (t.leaves.map fun i => nanToNum φ (xs.getD i (fin 0))).sum := by
+    intro t
+    apply List.sum_nonneg
+    simp only [List.mem_map]
+    rintro _ ⟨i, _, rfl⟩
+    exact (nanToNum_nn (getD_nn hx i)).2
+  induction t generalizing c with
+  | leaf i =>
+    simp only [STree.eval] at h
+    simp only [STree.leaves, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero,
+      List.length_singleton, Nat.sub_self, pow_zero, mul_one, h, nanToNum, le_refl]
+  | node l r ihl ihr =>
+    have hl := eval_nn hx l
+    have hr := eval_nn hx r
+    simp only [STree.eval] at h
+    -- both sides are finite
+    obtain ⟨cl, hcl⟩ : ∃ cl, l.eval φ xs = fin cl := by
+      generalize l.eval φ xs = v at hl h
+      match v with
+      | fin a => exact ⟨a, rfl⟩
+      | inf b =>
+        simp only [NN] at hl; subst hl
+        generalize r.eval φ xs = w at hr h
+        match w with
+        | fin _ => simp [F64.add] at h
+        | inf b' => simp only [NN] at hr; subst hr; simp [F64.add] at h
+        | nan => exact hr.elim
+      | nan => exact hl.elim
+    obtain ⟨cr, hcr⟩ : ∃ cr, r.eval φ xs = fin cr := by
+      generalize r.eval φ xs = v at hr h
+      match v with
+      | fin a => exact ⟨a, rfl⟩
+      | inf b =>
+        simp only [NN] at hr; subst hr
+        rw [hcl] at h; simp [F64.add] at h
+      | nan => exact hr.elim
+    simp only [hcl, hcr] at h hl hr
+    simp only [F64.add] at h
+    have hc := round_eq_fin h
+    have hadd := Fmt.rne_add_err (φ := φ) hl.1.1 hr.1.1
+    have hz : 0 ≤ cl + cr := add_nonneg hl.2 hr.2
+    rw [abs_of_nonneg hz] at hadd
+    have hcge : (cl + cr) * W ≤ c := by
+      rw [hc, hW]; have := (abs_le.mp hadd).1; nlinarith
+    have hl1 := ihl hcl
+    have hr1 := ihr hcr
+    have hnl := leaves_length_pos l
+    have hnr := leaves_length_pos r
+    simp only [STree.leaves, List.map_append, List.sum_append, List.length_append]
+    set Sl := (l.leaves.map fun i => nanToNum φ (xs.getD i (fin 0))).sum
+    set Sr := (r.leaves.map fun i => nanToNum φ (xs.getD i (fin 0))).sum
+    have hSl := hsum0 l
+    have hSr := hsum0 r
+    have e1 : W ^ (l.leaves.length + r.leaves.length - 1) ≤ W ^ (l.leaves.length - 1) * W := by
+      rw [← pow_succ]; exact pow_le_pow_of_le_one hW0 hW1 (by omega)
+    have e2 : W ^ (l.leaves.length + r.leaves.length - 1) ≤ W ^ (r.leaves.length - 1) * W := by
+      rw [← pow_succ]; exact pow_le_pow_of_le_one hW0 hW1 (by omega)
+    calc (Sl + Sr) * W ^ (l.leaves.length + r.leaves.length - 1)
+        = Sl * W ^ (l.leaves.length + r.leaves.length - 1)
+          + Sr * W ^ (l.leaves.length + r.leaves.length - 1) := by ring
+      _ ≤ Sl * (W ^ (l.leaves.length - 1) * W) + Sr * (W ^ (r.leaves.length - 1) * W) := by
+          gcongr
+      _ ≤ cl * W + cr * W := by
+          have := mul_le_mul_of_nonneg_right hl1 hW0
+          have := mul_le_mul_of_nonneg_right hr1 hW0
+          nlinarith
+      _ ≤ c := by linarith
+
+
+theorem sum_range_getD' (f : F64 → ℝ) (xs : List F64) :
+    ((List.range xs.length).map fun i => f (xs.getD i (fin 0))).sum = (xs.map f).sum := by
+  congr 1
+  apply List.ext_getElem (by simp)
+  intro i h1 h2
+  simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by simpa using h1)]
+
+/-- `add.reduce` loses at most a relative `2^-p` per addition. -/
+theorem reduce_lower {P : Plan} {xs : List F64} (hx : ∀ v ∈ xs, NN φ v) {c : ℝ}
+    (h : reduce φ P xs = fin c) :
+    (xs.map (nanToNum φ)).sum * (1 - 2 ^ (-(φ.p : ℤ))) ^ (xs.length - 1) ≤ c := by
+  unfold reduce at h
+  split_ifs at h with hne
+  · cases h; subst hne; simp
+  · have hperm := P.perm xs.length (List.length_pos_iff.mpr hne)
+    have := eval_lower hx _ h
+    rwa [(hperm.map _).sum_eq, hperm.length_eq, List.length_range, sum_range_getD'] at this
+
+/-- When `add.reduce` is finite, so is every element. -/
+theorem reduce_fin {P : Plan} {xs : List F64} (hx : ∀ v ∈ xs, NN φ v) {c : ℝ}
+    (h : reduce φ P xs = fin c) : ∀ v ∈ xs, ∃ a, v = fin a := by
+  intro v hv
+  obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hv
+  have hnn := hx _ hv
+  match hxi : xs[i] with
+  | fin a => exact ⟨a, rfl⟩
+  | nan => rw [hxi] at hnn; exact hnn.elim
+  | inf b =>
+    exfalso
+    rw [hxi] at hnn
+    simp only [NN] at hnn
+    subst hnn
+    have hne : xs ≠ [] := List.ne_nil_of_mem hv
+    unfold reduce at h
+    simp only [hne, ite_false] at h
+    have hperm := P.perm xs.length (List.length_pos_iff.mpr hne)
+    have hmem : i ∈ (P.tree xs.length).leaves := hperm.symm.subset (List.mem_range.mpr hi)
+    have hgd : xs.getD i (fin 0) = inf false := by
+      simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi, hxi]
+    rw [eval_inf hx hgd _ hmem] at h
+    cases h
+
+/-- **True L1 norms.** A row whose computed L1 norm is `c` has true L1 norm at most
+`c / (1 - 2^-p)^(n - 1)`. -/
+theorem l1_true_norm (P : Plan) {w : List ℝ} (hw : ∀ a ∈ w, Ok φ a) {c : ℝ}
+    (h : rowNorm φ P .l1 (w.map fin) = fin c) :
+    (w.map fun a => |a|).sum * (1 - 2 ^ (-(φ.p : ℤ))) ^ (w.length - 1) ≤ c := by
+  simp only [rowNorm] at h
+  have hx : ∀ v ∈ (w.map fin).map F64.abs, NN φ v := by
+    simp only [List.map_map, List.mem_map]
+    rintro _ ⟨a, ha, rfl⟩
+    exact ⟨⟨isRep_abs (hw a ha).1, by rw [abs_abs]; exact (hw a ha).2⟩, abs_nonneg a⟩
+  have := reduce_lower hx h
+  simp only [List.map_map, List.length_map] at this
+  exact this
+
+theorem sum_affine (w : List ℝ) (W η : ℝ) :
+    (w.map fun a => a ^ 2 * W - η).sum = (w.map fun a => a ^ 2).sum * W - w.length * η := by
+  induction w with
+  | nil => simp
+  | cons a w ih => simp only [List.map_cons, List.sum_cons, ih, List.length_cons]; push_cast; ring
+
+/-- **True L2 norms (F10).** A row whose computed L2 norm is `c` has true squared norm at most
+`((c + η)² + n η) / (1 - 2^-p)^(n + 2)`, with `η = 2^qmin / 2`: each square loses at most a
+relative `2^-p` and an absolute `η` (when it underflows), each addition and the square root a
+relative `2^-p`. -/
+theorem l2_true_norm (P : Plan) {w : List ℝ} (hw : ∀ a ∈ w, Ok φ a) {c : ℝ}
+    (h : rowNorm φ P .l2 (w.map fin) = fin c) :
+    (w.map fun a => a ^ 2).sum * (1 - 2 ^ (-(φ.p : ℤ))) ^ (w.length + 2)
+      ≤ (c + 2 ^ φ.qmin / 2) ^ 2 + w.length * (2 ^ φ.qmin / 2) := by
+  have hu : (2 : ℝ) ^ (-(φ.p : ℤ)) ≤ 1 / 4 := by
+    have := Fmt.two_pow_p_ge (φ := φ)
+    rw [zpow_neg, zpow_natCast, inv_le_comm₀ (by positivity) (by norm_num)]; linarith
+  have hu0 := Fmt.two_zpow_pos (-(φ.p : ℤ))
+  have hη0 : (0 : ℝ) < 2 ^ φ.qmin / 2 := by have := Fmt.two_zpow_pos φ.qmin; linarith
+  set u := (2 : ℝ) ^ (-(φ.p : ℤ)) with hudef
+  set η := (2 : ℝ) ^ φ.qmin / 2 with hηdef
+  set W := 1 - u with hW
+  have hW0 : 0 ≤ W := by linarith
+  have hW1 : W ≤ 1 := by linarith
+  have hx : ∀ v ∈ (w.map fin).map (F64.sq φ), NN φ v := by
+    simp only [List.map_map, List.mem_map]
+    rintro _ ⟨a, _, rfl⟩
+    exact round_nn (mul_self_nonneg a)
+  simp only [rowNorm] at h
+  generalize hR : reduce φ P ((w.map fin).map (F64.sq φ)) = R at h
+  have hRnn : NN φ R := hR ▸ reduce_nn hx
+  obtain ⟨s, rfl⟩ : ∃ s, R = fin s := by
+    match R, hRnn, h with
+    | fin s, _, _ => exact ⟨s, rfl⟩
+    | inf b, hb, h => simp only [NN] at hb; subst hb; simp [F64.sqrt] at h
+    | nan, hb, _ => exact hb.elim
+  have hs0 : 0 ≤ s := hRnn.2
+  simp only [F64.sqrt, show ¬ s < 0 from not_lt.mpr hs0, ite_false] at h
+  have hc := round_eq_fin h
+  have hsq := Real.sqrt_nonneg s
+  have hc1 : W * Real.sqrt s ≤ c + η := by
+    have := (abs_le.mp (rne_err (φ := φ) (Real.sqrt s))).1
+    rw [abs_of_nonneg hsq, ← hc] at this
+    rw [hW]; nlinarith
+  have hc0 : 0 ≤ c := by rw [hc]; exact Fmt.rne_zero (φ := φ) ▸ Fmt.rne_mono hsq
+  have hcs : W ^ 2 * s ≤ (c + η) ^ 2 := by
+    have e : W ^ 2 * s = (W * Real.sqrt s) ^ 2 := by rw [mul_pow, Real.sq_sqrt hs0]
+    rw [e]; exact pow_le_pow_left₀ (by positivity) hc1 2
+  by_cases hw0 : w = []
+  · subst hw0
+    simp only [List.map_nil, List.sum_nil, zero_mul, List.length_nil, Nat.cast_zero, add_zero]
+    positivity
+  have hn : 1 ≤ w.length := List.length_pos_iff.mpr hw0
+  have hfin := reduce_fin hx hR
+  have hl : ∀ a ∈ w, a ^ 2 * W - η ≤ nanToNum φ (F64.sq φ (fin a)) := by
+    intro a ha
+    obtain ⟨l, hl⟩ := hfin _ (List.mem_map.mpr ⟨fin a, List.mem_map.mpr ⟨a, ha, rfl⟩, rfl⟩)
+    have hle := (abs_le.mp (rne_err (φ := φ) (a * a))).1
+    rw [abs_of_nonneg (mul_self_nonneg a)] at hle
+    simp only [F64.sq] at hl ⊢
+    rw [hl, nanToNum, round_eq_fin hl, hW]
+    nlinarith
+  have hL := reduce_lower hx hR
+  simp only [List.length_map] at hL
+  have hsumL : (w.map fun a => a ^ 2 * W - η).sum
+      ≤ (((w.map fin).map (F64.sq φ)).map (nanToNum φ)).sum := by
+    simp only [List.map_map]
+    exact List.sum_le_sum hl
+  rw [sum_affine] at hsumL
+  set A := (w.map fun a => a ^ 2).sum
+  set L := (((w.map fin).map (F64.sq φ)).map (nanToNum φ)).sum
+  set n := w.length
+  have e1 : W ^ (n + 1) = W ^ (n - 1) * W ^ 2 := by rw [← pow_add]; congr 1; omega
+  have hp1 := pow_nonneg hW0 (n + 1)
+  have hp1' : W ^ (n + 1) ≤ 1 := pow_le_one₀ hW0 hW1
+  have step : (A * W - n * η) * W ^ (n + 1) ≤ (c + η) ^ 2 := by
+    calc (A * W - n * η) * W ^ (n + 1) ≤ L * W ^ (n + 1) := mul_le_mul_of_nonneg_right hsumL hp1
+      _ = L * W ^ (n - 1) * W ^ 2 := by rw [e1]; ring
+      _ ≤ s * W ^ 2 := mul_le_mul_of_nonneg_right hL (by positivity)
+      _ ≤ (c + η) ^ 2 := by linarith
+  have hnη : (0 : ℝ) ≤ n * η := by positivity
+  calc A * W ^ (n + 2) = A * W * W ^ (n + 1) := by ring
+    _ ≤ (c + η) ^ 2 + n * η * W ^ (n + 1) := by nlinarith
+    _ ≤ (c + η) ^ 2 + n * η := by nlinarith
+
+
+namespace Clamp
+
+variable (C : Clamp φ)
+
+/-- **True norms of the outputs (F10), with origin zero.** Every output row is a row `w` of
+finite floats whose true norm is within rounding error of the bound: for `p = 1`,
+`‖w‖₁ (1 - 2^-p)^(n-1) ≤ norm`, and for `p = 2`,
+`‖w‖₂² (1 - 2^-p)^(n+2) ≤ (norm + η)² + n η` with `η = 2^qmin / 2`. With `norm` at least
+`make_np_clamp`'s minimum, `n η ≤ (2^-p norm)²` and `η ≤ 2^-p norm` for `n ≤ 2^p`, so
+the underflow terms are at most a relative rounding error (`slack_le`). -/
+theorem clamp_true_norm {d : ℕ} (hO : C.origin = List.replicate d 0) (hb : 0 ≤ C.bound)
+    {n : ℕ} {x out : List (List F64)} (h : C.clamp n x = .ok out) :
+    ∀ row ∈ out, ∃ w : List ℝ, row = w.map fin ∧
+      (C.ord = .l1 → (w.map fun a => |a|).sum * (1 - 2 ^ (-(φ.p : ℤ))) ^ (w.length - 1)
+        ≤ C.bound) ∧
+      (C.ord = .l2 → (w.map fun a => a ^ 2).sum * (1 - 2 ^ (-(φ.p : ℤ))) ^ (w.length + 2)
+        ≤ (C.bound + 2 ^ φ.qmin / 2) ^ 2 + w.length * (2 ^ φ.qmin / 2)) := by
+  intro row hrow
+  have hmem := C.clamp_member hb h row hrow
+  obtain ⟨w, rfl, hw, hlen⟩ :
+      ∃ w : List ℝ, row = w.map fin ∧ (∀ a ∈ w, Ok φ a) ∧ w.length ≤ d := by
+    unfold clamp at h
+    split at h
+    · rename_i rows hl
+      cases h
+      obtain ⟨N, rfl, _⟩ := C.loop_spec hl
+      simp only [List.mem_map] at hrow
+      obtain ⟨_, ⟨_, ⟨row0, _, rfl⟩, rfl⟩, rfl⟩ := hrow
+      have hok := C.iterate_ok (C.pre_ok row0) N
+      have hlen : (C.body^[N] (C.pre row0)).length ≤ d := by
+        have : ∀ M (s : List ℝ), (C.body^[M] s).length = s.length := by
+          intro M; induction M with
+          | zero => intro s; rfl
+          | succ M ih => intro s; rw [Function.iterate_succ_apply, ih]; simp [body]
+        rw [this, pre, List.length_zipWith, hO, List.length_replicate]; omega
+      set s := C.body^[N] (C.pre row0)
+      have hpost : C.postV0 s = s.map fin := by
+        rw [postV0, hO, zipWith_zeros _ hlen]
+        apply List.map_congr_left
+        intro a ha; simp only [add_zero]; exact round_of_ok (hok a ha)
+      unfold post
+      split_ifs
+      · refine ⟨List.replicate d 0, by rw [hO], ?_, by simp⟩
+        intro a ha; rw [List.eq_of_mem_replicate ha]; exact ok_zero
+      · exact ⟨s, hpost, hok, hlen⟩
+    · cases h
+  have hsub : List.zipWith (F64.subR φ) (w.map fin) C.origin = w.map fin := by
+    rw [hO, zipWith_zeros _ (by simpa using hlen), List.map_map]
+    apply List.map_congr_left
+    intro a ha; simp only [Function.comp, F64.subR, sub_zero]; exact round_of_ok (hw a ha)
+  unfold memberNorm outside at hmem
+  rw [hsub] at hmem
+  have hnn := rowNorm_nn (φ := φ) (P := C.P) (o := C.ord) hw
+  obtain ⟨c, hc, hcb, hc0⟩ : ∃ c, rowNorm φ C.P C.ord (w.map fin) = fin c ∧ c ≤ C.bound ∧ 0 ≤ c := by
+    generalize rowNorm φ C.P C.ord (w.map fin) = v at hmem hnn
+    match v with
+    | fin c => exact ⟨c, rfl, not_lt.mp hmem, hnn.2⟩
+    | inf b => simp only [NN] at hnn; subst hnn; simp [F64.gt] at hmem
+    | nan => exact hnn.elim
+  refine ⟨w, rfl, fun ho => ?_, fun ho => ?_⟩
+  · rw [ho] at hc; exact (l1_true_norm C.P hw hc).trans hcb
+  · rw [ho] at hc
+    have hη : (0 : ℝ) ≤ 2 ^ φ.qmin / 2 := by have := Fmt.two_zpow_pos φ.qmin; linarith
+    have := l2_true_norm C.P hw hc
+    have : (c + 2 ^ φ.qmin / 2) ^ 2 ≤ (C.bound + 2 ^ φ.qmin / 2) ^ 2 :=
+      pow_le_pow_left₀ (by linarith) (by linarith) 2
+    linarith
+
+end Clamp
+
+/-- With `n η ≤ (u B)²` and `η ≤ u B`, the bound of `clamp_true_norm` for `p = 2` is
+`B² ((1 + u)² + u²)`: a relative excess of about `(n / 2 + 2) u` on the norm. -/
+theorem slack_le {B u η n : ℝ} (hB : 0 ≤ B) (hη : 0 ≤ η) (h1 : n * η ≤ (u * B) ^ 2)
+    (h2 : η ≤ u * B) : (B + η) ^ 2 + n * η ≤ B ^ 2 * ((1 + u) ^ 2 + u ^ 2) := by
+  have : (B + η) ^ 2 ≤ (B + u * B) ^ 2 := pow_le_pow_left₀ (by linarith) (by linarith) 2
+  nlinarith
+
+
+theorem q32 : binary32.qmin = -149 := by decide
+
+/-- The minimum norm `2^-458` of `make_np_clamp` for `f64` meets the hypotheses of
+`TermHyp.of_min` and `slack_le`, for rows of at most `2^53` values. -/
+theorem min_norm_f64 {B : ℝ} (hB : 2 ^ (-458 : ℤ) ≤ B) {n : ℕ} (hn : n ≤ 2 ^ 53) :
+    (2 : ℝ) ^ (emin binary64 + binary64.p) ≤ B ∧
+      (n : ℝ) * (2 ^ binary64.qmin / 2) ≤ (2 ^ (-(binary64.p : ℤ)) * B) ^ 2 ∧
+      2 ^ binary64.qmin / 2 ≤ 2 ^ (-(binary64.p : ℤ)) * B := by
+  set_option exponentiation.threshold 2200 in
+  have he : emin binary64 + binary64.p = -969 := by decide
+  rw [he, q64, p64]
+  have hn' : (n : ℝ) ≤ 2 ^ 53 := by exact_mod_cast hn
+  have hm : (2 : ℝ) ^ (-(53 : ℤ)) * 2 ^ (-458 : ℤ) ≤ 2 ^ (-(53 : ℤ)) * B :=
+    mul_le_mul_of_nonneg_left hB (by positivity)
+  have hsq := pow_le_pow_left₀ (by positivity) hm 2
+  refine ⟨le_trans (zpow_le_zpow_right₀ (by norm_num) (by norm_num)) hB, ?_, ?_⟩
+  · calc (n : ℝ) * (2 ^ (-1074 : ℤ) / 2) ≤ 2 ^ 53 * (2 ^ (-1074 : ℤ) / 2) :=
+          mul_le_mul_of_nonneg_right hn' (by positivity)
+      _ = (2 ^ (-(53 : ℤ)) * 2 ^ (-458 : ℤ)) ^ 2 := by norm_num
+      _ ≤ _ := hsq
+  · calc (2 : ℝ) ^ (-1074 : ℤ) / 2 ≤ 2 ^ (-(53 : ℤ)) * 2 ^ (-458 : ℤ) := by norm_num
+      _ ≤ _ := hm
+
+/-- The same for the minimum norm `2^-39` for `f32`, for rows of at most `2^24` values. -/
+theorem min_norm_f32 {B : ℝ} (hB : 2 ^ (-39 : ℤ) ≤ B) {n : ℕ} (hn : n ≤ 2 ^ 24) :
+    (2 : ℝ) ^ (emin binary32 + binary32.p) ≤ B ∧
+      (n : ℝ) * (2 ^ binary32.qmin / 2) ≤ (2 ^ (-(binary32.p : ℤ)) * B) ^ 2 ∧
+      2 ^ binary32.qmin / 2 ≤ 2 ^ (-(binary32.p : ℤ)) * B := by
+  have he : emin binary32 + binary32.p = -102 := by decide
+  rw [he, q32, show binary32.p = 24 from rfl]
+  have hn' : (n : ℝ) ≤ 2 ^ 24 := by exact_mod_cast hn
+  have hm : (2 : ℝ) ^ (-(24 : ℤ)) * 2 ^ (-39 : ℤ) ≤ 2 ^ (-(24 : ℤ)) * B :=
+    mul_le_mul_of_nonneg_left hB (by positivity)
+  have hsq := pow_le_pow_left₀ (by positivity) hm 2
+  refine ⟨le_trans (zpow_le_zpow_right₀ (by norm_num) (by norm_num)) hB, ?_, ?_⟩
+  · calc (n : ℝ) * (2 ^ (-149 : ℤ) / 2) ≤ 2 ^ 24 * (2 ^ (-149 : ℤ) / 2) :=
+          mul_le_mul_of_nonneg_right hn' (by positivity)
+      _ = (2 ^ (-(24 : ℤ)) * 2 ^ (-39 : ℤ)) ^ 2 := by norm_num
+      _ ≤ _ := hsq
+  · calc (2 : ℝ) ^ (-149 : ℤ) / 2 ≤ 2 ^ (-(24 : ℤ)) * 2 ^ (-39 : ℤ) := by norm_num
+      _ ≤ _ := hm
+
+end Fixed
 
 end OpenDP.NpClamp
