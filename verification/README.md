@@ -663,6 +663,46 @@ Mutation checks: each of the following makes the Lean build fail:
 `nonterm_subnormal` and `nonterm_normal` show that the conditions of `clamp_terminates` are
 needed: without them the theorem is false.
 
+### Linking the model to the code
+
+The theorems are about the hand transcription, so the transcription and the numpy model are tested
+against the code, bit for bit:
+- **Executable model** (`verification/lean/OpenDPVerification/NpClampExec.lean`). The same functions
+  over `ℚ` instead of `ℝ`, with a computable rounding (square roots included). Each is proved equal
+  to the model's, and `ClampQ.clamp_toRes` states that running `clamp` returns the model's result.
+  So the program the tests run is the model the theorems are about.
+- **numpy's summation order** (`numpyPlan`): numpy's `pairwise_sum` (8 accumulators up to 128
+  elements, split in two above), proved to be a `Plan`. All theorems therefore hold for it.
+- **Oracle** (`verification/lean/NpClampOracle.lean`): runs the executable model on JSON requests,
+  with floats as exact rationals.
+- **Tests** (`verification/conformance/test_np_clamp.py`, 18 tests, about 2 minutes):
+  - `test_norm`: the model's norm is `np.linalg.norm`. This tests the numpy model: IEEE operations,
+    the norm formulas, and the summation tree, for row lengths 0-19 and up to 1500.
+  - `test_outside`: the model's `outside` is the output domain's member check, on rows within a
+    few ulps of the bound.
+  - `test_clamp`, `test_clamp_findings`: the model's `clamp` is `make_np_clamp`'s function, on
+    random inputs and on the inputs of the findings. The bound and origin are computed from the
+    constructor's arguments as it does.
+
+```sh
+cd verification/lean && lake build && cd ../..
+PYTHONPATH=python/src uv run --no-project --with numpy --with pytest --with deprecated \
+  python -m pytest verification/conformance
+```
+
+The tests found F18: with `norm` near the largest float, a row whose norm overflows takes up to
+~2^52 passes to clamp. It is open, and the random tests keep `norm` at most half the largest float
+for this reason.
+
+Mutation checks:
+- the tests fail on each of these changes to `make_np_clamp`:
+  - no `np.ascontiguousarray`;
+  - no replacement by `origin`;
+  - `float32(norm)` as the bound;
+- the tests fail when the model's 8 accumulators are combined left to right instead of pairwise
+  (the proofs still pass, since the order is not constrained by them);
+- the build fails when the executable `nan_to_num` maps infinity to 0 (`nanToNum_toF`).
+
 Code changes (Python):
 - `make_np_clamp`:
   - minimum norm, float elements only;

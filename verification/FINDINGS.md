@@ -408,6 +408,26 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
     arithmetic stays in it. The output domain records the converted origin.
   - Test: `test_clamp_dtype`.
 
+### F18. `make_np_clamp` takes up to ~2^52 passes when `norm` is near the largest float
+
+- **What:** When a row's computed norm overflows, `nan_to_num` makes it the largest float, so the
+  row's factor is `max / norm_T`. For `norm` near the largest float this factor is barely above 1,
+  and each pass of the loop shrinks the row by about that factor. For `p = 2` the norm overflows as
+  soon as the squares do, i.e. for elements above about `1.3e154`. The number of passes is about
+  `log(excess) / log(max / norm_T)`.
+- **Confirmed:** by running it only (the loop of `_function` in numpy 2.5.4):
+  - `norm = nextafter(max, 0)`, `p = 2`, row `[1e200, 1e200]`: still looping after 2.3 million
+    passes (20 s); the estimate is ~10^17 passes;
+  - `norm = nextafter(max, 0)`, `p = 1`, row `[max, max]`: likewise;
+  - `norm = 0.995 * max`, `p = 2`, a row of 300 values around `1e270`: 52,977 passes. The
+    conformance tests found this case: the Lean model ran out of its fuel of 10,000 passes.
+- **Not in conflict with the proofs:** `clamp_terminates` proves termination, but its bound counts
+  steps of the smallest subnormal and is astronomically large.
+- **Impact:** For such norms, the transformation effectively never returns on some datasets
+  (denial of service). The number of passes, and so the running time, depends on the data.
+- **Status:** Open. One option is to divide rows whose norm overflows by a power of two, which is
+  exact, before computing the factor.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`

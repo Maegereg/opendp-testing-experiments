@@ -11,7 +11,9 @@ of radius `norm` around `origin`, and claims:
 
 `_function` is transcribed by hand below (`clamp`), against a model of the numpy operations it
 uses. `clampV0` transcribes the code before the fixes (F9-F17), and the counterexamples are about
-it. The model is trusted:
+it. The model is trusted, and tested: `NpClampExec.lean` is an executable copy proved equal to it,
+which `verification/conformance/test_np_clamp.py` compares with numpy and the code.
+The model:
 * Element-wise operations (`-`, `+`, `*`, `/`, `np.sqrt`, `np.abs`, `np.maximum`,
   `np.nan_to_num`) on `float64` (or `float32`) arrays are IEEE 754 operations, rounding to
   nearest, ties to even (`Fmt.rne`), on each element (`F64`, with infinities and NaN).

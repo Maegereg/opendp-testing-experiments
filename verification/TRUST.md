@@ -131,6 +131,7 @@ a model of floating-point rounding. Its theorems depend only on Lean's standard 
 | `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls), whose Creusot contract they justify | See below. |
 | `OpenDP.Float.Fmt.satSeqSum_err` | `Sequential::<T>::saturating_sum`, justifying `seq_saturating_sum_error` | IEEE arithmetic and the transcription, as below; `saturating_add` is IEEE addition clamped to `[-MAX, MAX]` (an infinity clamps to `±MAX`). |
 | `OpenDP.NpClamp.Clamp.clamp_map`, `clamp_stable`, `clamp_no_nan`, `clamp_member`, `clamp_empty`, `clamp_true_norm`, `clamp_terminates`, and the counterexamples F9-F14 (about the code before the fixes) | `make_np_clamp` (Python, `python/src/opendp/extras/numpy/_make_np_clamp/`) | The numpy model and the transcription, below. |
+| `OpenDP.NpClamp.Exec.ClampQ.clamp_toRes`, `rowNormQ_toF`, `numpyPlan` | none: they tie an executable copy of the `make_np_clamp` model to the model, so tests can run it | Nothing. The oracle's input and output (`NpClampOracle.lean`) and the constructor's computations (`floorFloat`, the conversion of `origin`) are not proved; the conformance tests check them. |
 
 Assumptions of these theorems:
 
@@ -161,9 +162,16 @@ Assumptions of the `make_np_clamp` theorems (`NpClamp.lean`):
   - `Clamp.clampV0` transcribes the code before the fixes, which the counterexamples are about.
   - `Clamp.memberNorm` transcribes the norm check of `array2_domain`'s member function.
 
-  Nothing ties the transcription to the Python mechanically.
-  `verification/scripts/np_clamp_counterexamples.py` checks that each counterexample behaves the same
-  in numpy, and `python/test/extras/test_clamp_numpy.py` tests each fix.
+  The transcription is tested, not proved. `NpClampExec.lean` is an executable copy of the model,
+  proved equal to it (`ClampQ.clamp_toRes`). `verification/conformance/test_np_clamp.py` runs it and
+  the code on the same inputs, and requires the same floats:
+  - `make_np_clamp`'s function, on random inputs (with NaN, infinities, subnormals, large values,
+    both layouts) and on the inputs of the findings;
+  - the output domain's norm check, on rows at the boundary.
+
+  Inputs the tests do not reach are not covered, nor are norms within a factor 2 of the largest
+  float (F18). `verification/scripts/np_clamp_counterexamples.py` checks that each counterexample
+  behaves the same in numpy, and `python/test/extras/test_clamp_numpy.py` tests each fix.
 - **Constructor checks.** The checks in `make_np_clamp` are not modelled; the theorems take them as
   hypotheses:
   - the minimum norm (`TermHyp`, and the hypotheses of `slack_le`, which `min_norm_f64` and
@@ -183,6 +191,10 @@ Assumptions of the `make_np_clamp` theorems (`NpClamp.lean`):
   the row length (`Plan`). This holds for C-ordered arrays, as observed. The function makes its array
   C-ordered, and the domain's check runs on the output, which is C-ordered (F15). The theorems hold
   for every such tree, so the exact pairwise order does not matter.
+
+  The element-wise operations, the norm formulas and the order are tested together: `test_norm`
+  requires the model's norm with `numpyPlan` (numpy's `pairwise_sum`) to equal `np.linalg.norm` on
+  random rows, for row lengths 0-19 and up to 1500, in both formats (numpy 2.5.4).
 - **One format.**
   - The data, `origin` (converted to the data type) and the bound `norm_T` are in one format.
     `norm_T` is the largest value of the data type that is at most `norm`.
