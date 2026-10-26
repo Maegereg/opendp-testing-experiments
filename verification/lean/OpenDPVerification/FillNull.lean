@@ -3,8 +3,8 @@
 
 The constructor builds the Polars expression `data.fill_null(fill)`, which Polars evaluates later.
 It claims:
-* the output domain is the data's domain with bounds dropped and no nulls; its element type and
-  NaN flag are the data's;
+* the output domain is the data's domain with bounds dropped and no nulls; its element type is the
+  data's (the fill must have it), and it may hold NaN when the data or the fill may;
 * the stability map `d_in ↦ d_in`.
 
 ## The model
@@ -25,13 +25,16 @@ rounding it to a rational, which maps NaN to 0 (`discretize_vec` in
 * `fill_member`: the output is in the claimed domain when every fill value satisfies the data's
   predicate (with bounds dropped). `fill_nan_counterexample` (F20): otherwise it can fail; a NaN
   fill on a column whose domain excludes NaN.
+* `fill_member_fixed` (the fix of F20): with the output's NaN flag the data's or the fill's, the
+  output is always in the claimed domain; `fill_noNaN_fixed`: if that domain excludes NaN, no output
+  value is NaN, so the F21 query is rejected by `sum`, which requires data without NaN.
 * `fill_stable`: `d_out ≤ d_in` under the symmetric distance, for a column fill (a row function)
   and for a scalar fill (a function of each data value).
 * `null_leak` (F21): `fill_nan(0).fill_null(NaN).clip(0, 1).sum()` gives `n` on `n` rows of `1.0`,
   and `0` once a null row is added, at symmetric distance 1, for every summation order. The noise is
   added to these values, while the sum's stability map allows a difference of 1.
-* F19 (the output type is the supertype of the data's and the fill's) is not modelled; it is
-  confirmed by running (`expr_fill_null/test.rs`).
+* F19 (the output type is the supertype of the data's and the fill's) is not modelled; it, and its
+  fix (the fill must have the data's type), are checked by running (`expr_fill_null/test.rs`).
 -/
 import OpenDPVerification.NpClamp
 
@@ -89,6 +92,31 @@ theorem fill_nan_counterexample :
       ¬ noNaN.MemV ([((none : Option F64), nan)].map fun r => fillRow r.1 r.2) := by
   refine ⟨by simp [ColDom.Mem], ?_⟩
   simp [ColDom.MemV, ColDom.Mem, noNaN, fillRow]
+
+/-- A float column domain without bounds and nulls, allowing NaN when `b` (the NaN flag). -/
+def nanDom (b : Bool) : ColDom F64 := ⟨false, fun v => b = true ∨ v ≠ nan⟩
+
+/-- **The fixed output domain (F20).** The output may hold NaN when the data or the fill may: the
+NaN flag of the output domain is the data's or the fill's. With this flag, the output is in the
+claimed domain (and the fill's type is the data's, F19, so the fill values are floats of the same
+format). -/
+theorem fill_member_fixed (nd nf : Bool) (rows : List (Option F64 × F64))
+    (hd : ColDom.Mem ⟨true, fun v => nd = true ∨ v ≠ nan⟩ (rows.map Prod.fst))
+    (hf : ∀ r ∈ rows, nf = true ∨ r.2 ≠ nan) :
+    (nanDom (nd || nf)).MemV (rows.map fun r => fillRow r.1 r.2) :=
+  fill_member _ _ (fun v h => by rcases h with h | h <;> simp [h]) rows hd
+    (fun r hr => by rcases hf r hr with h | h <;> simp [h])
+
+/-- With the fix, the output domain excludes NaN only if neither the data nor the fill may hold
+NaN; then no output value is NaN. So `fill_null` passes NaN on to `sum` (F21) only under a domain
+that allows NaN, which `sum` rejects. -/
+theorem fill_noNaN_fixed (nd nf : Bool) (h : (nd || nf) = false) (rows : List (Option F64 × F64))
+    (hd : ColDom.Mem ⟨true, fun v => nd = true ∨ v ≠ nan⟩ (rows.map Prod.fst))
+    (hf : ∀ r ∈ rows, nf = true ∨ r.2 ≠ nan) :
+    ∀ v ∈ rows.map (fun r => fillRow r.1 r.2), v ≠ nan := by
+  intro v hv
+  have := fill_member_fixed nd nf rows hd hf (some v) (by simpa using hv)
+  simpa [nanDom, h] using this
 
 /-! ## Stability -/
 

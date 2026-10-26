@@ -249,9 +249,8 @@ fn check_claim(
 }
 
 #[test]
-#[ignore = "F19 (verification/FINDINGS.md): open"]
 fn test_fill_null_keeps_dtype() -> Fallible<()> {
-    // Polars casts to the supertype of the data and the fill; the output domain keeps the data's type
+    // F19: Polars casts to the supertype of the data and the fill; the output domain keeps the data's type
     let lf_domain = LazyFrameDomain::new(vec![
         SeriesDomain::new("i32", OptionDomain::new(AtomDomain::<i32>::default())),
         SeriesDomain::new("f64", AtomDomain::<f64>::default()),
@@ -260,18 +259,49 @@ fn test_fill_null_keeps_dtype() -> Fallible<()> {
     check_claim(&lf_domain, &lf, col("i32").fill_null(lit(1.5)))?;
     check_claim(&lf_domain, &lf, col("i32").fill_null(lit(1i64 << 40)))?;
     check_claim(&lf_domain, &lf, col("i32").fill_null(lit("a")))?;
-    check_claim(&lf_domain, &lf, col("i32").fill_null(col("f64")))
+    check_claim(&lf_domain, &lf, col("i32").fill_null(col("f64")))?;
+
+    // these fills are rejected
+    for fill in [lit(1.5), lit(1i64 << 40), lit("a"), col("f64")] {
+        let t = col("i32").fill_null(fill).make_stable(
+            lf_domain.clone().row_by_row(),
+            FrameDistance(SymmetricDistance),
+        );
+        assert!(t.is_err());
+    }
+    // a numeric literal the data's type holds exactly is converted to it
+    for fill in [lit(2i64), lit(2.0), lit(2u32)] {
+        let out = eval_row_by_row(&lf_domain, &lf, col("i32").fill_null(fill))?;
+        assert_eq!(
+            out.i32()?.into_iter().collect::<Vec<_>>(),
+            [Some(2), Some(1)]
+        );
+    }
+    Ok(())
 }
 
 #[test]
-#[ignore = "F20 (verification/FINDINGS.md): open"]
 fn test_fill_null_nan() -> Fallible<()> {
-    // the output domain keeps the data's NaN flag, whatever the fill
+    // F20: the output may hold NaN when the fill may, even if the data may not
     let lf_domain = LazyFrameDomain::new(vec![
         SeriesDomain::new("x", OptionDomain::new(AtomDomain::<f64>::new(None, None))),
         SeriesDomain::new("f", AtomDomain::<f64>::default()),
     ])?;
     let lf = df!("x" => [None, Some(1.0)], "f" => [f64::NAN, 2.0])?.lazy();
     check_claim(&lf_domain, &lf, col("x").fill_null(lit(f64::NAN)))?;
-    check_claim(&lf_domain, &lf, col("x").fill_null(col("f")))
+    check_claim(&lf_domain, &lf, col("x").fill_null(col("f")))?;
+
+    for fill in [lit(f64::NAN), col("f"), lit(f32::NAN)] {
+        let t = col("x").fill_null(fill).make_stable(
+            lf_domain.clone().row_by_row(),
+            FrameDistance(SymmetricDistance),
+        )?;
+        assert!(t.output_domain.column.atom_domain::<f64>()?.nan());
+    }
+    let t = col("x").fill_null(lit(0.0)).make_stable(
+        lf_domain.clone().row_by_row(),
+        FrameDistance(SymmetricDistance),
+    )?;
+    assert!(!t.output_domain.column.atom_domain::<f64>()?.nan());
+    Ok(())
 }

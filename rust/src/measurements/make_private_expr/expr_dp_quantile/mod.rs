@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use polars::chunked_array::cast::CastOptions;
 use polars::error::polars_err;
 use polars::prelude::AnonymousColumnsUdf;
 use polars::series::Series;
 use polars::{
     error::{PolarsResult, polars_bail},
-    prelude::{Column, ColumnsUdf, Expr, lit},
+    prelude::{AnyValue, Column, ColumnsUdf, DataType, Expr, Scalar, lit},
 };
 use polars_plan::prelude::FunctionOptions;
 use serde::{Deserialize, Serialize};
@@ -103,7 +104,10 @@ where
     let midpoint = literal_value_of::<Series>(&candidates)?
         .and_then(|s| s.median())
         .ok_or_else(|| err!(MakeMeasurement, "candidates must be non-empty"))?;
-    input = input.fill_null(lit(midpoint));
+    // fill_null requires a fill of the data's type
+    let midpoint = Scalar::new(DataType::Float64, AnyValue::Float64(midpoint))
+        .cast_with_options(&series_domain.dtype(), CastOptions::Strict)?;
+    input = input.fill_null(lit(midpoint.clone()));
 
     if series_domain.dtype().is_float() {
         input = input.fill_nan(lit(midpoint))

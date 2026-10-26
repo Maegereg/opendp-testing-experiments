@@ -597,26 +597,30 @@ claims hold for what Polars computes.
     predicate;
   - `fill_stable`, `fill_stable_scalar`: `d_out ≤ d_in` under the symmetric distance, for column
     and scalar fills;
-  - `fill_nan_counterexample` (F20) and `null_leak` (F21).
+  - `fill_member_fixed`, `fill_noNaN_fixed`: with the fix of F20, the output is always in the
+    claimed domain, and a domain without NaN means no output value is NaN;
+  - `fill_nan_counterexample` (F20) and `null_leak` (F21), about the code before the fixes.
 - **Conformance tests** (`expr_fill_null/test.rs`, `test_fill_null_model_*`): Polars' output is
   the model's, bit for bit, on random columns (NaN, infinities, signed zeros, nulls), for column and
   scalar fills, in row-by-row and aggregation contexts. Every output is a member of the output
   domain.
 - **Creusot is not possible here:** its toolchain cannot compile Polars.
 
-Found (all open):
+Found and fixed:
 
-| | Bug | Shown by |
-| --- | --- | --- |
-| F19 | the output's type is the supertype of the data's and the fill's; the domain keeps the data's | running it (`test_fill_null_keeps_dtype`, ignored) |
-| F20 | a fill that can be NaN puts NaN in a column whose domain excludes it | Lean (`fill_nan_counterexample`) and running it (`test_fill_null_nan`, ignored) |
-| F21 | through F20, one null row moves a released sum from `n` to about 0: a privacy violation | Lean (`null_leak`) and the released package (`verification/scripts/fill_null_counterexamples.py`) |
+| | Bug | Shown by | Fix |
+| --- | --- | --- | --- |
+| F19 | the output's type is the supertype of the data's and the fill's; the domain keeps the data's | running it (`test_fill_null_keeps_dtype`) | the fill must have the data's type; numeric literals the data's type holds exactly are converted to it |
+| F20 | a fill that can be NaN puts NaN in a column whose domain excludes it | Lean (`fill_nan_counterexample`) and running it (`test_fill_null_nan`) | the output's NaN flag is the data's or the fill's (`fill_member_fixed`) |
+| F21 | through F20, one null row moves a released sum from `n` to about 0: a privacy violation | Lean (`null_leak`) and the released package (`verification/scripts/fill_null_counterexamples.py`) | the fix of F20: `sum` rejects the query |
+
+The tests of F19 and F20 fail on the code before the fixes. `dp.quantile` filled nulls with an
+`f64` median; it now converts the median to the data's type.
 
 ```sh
-cd rust && cargo test --features untrusted,polars --lib expr_fill_null            # passes
-cd rust && cargo test --features untrusted,polars --lib expr_fill_null -- --ignored  # F19, F20 fail
+cd rust && cargo test --features untrusted,polars --lib expr_fill_null  # passes
 uv run --with opendp==0.16.0 --with polars==1.36.1 --with pyarrow \
-  python -I verification/scripts/fill_null_counterexamples.py
+  python -I verification/scripts/fill_null_counterexamples.py           # F21 in the release
 ```
 
 Mutation check: building `fill.fill_null(data)` instead of `data.fill_null(fill)` makes 4 tests

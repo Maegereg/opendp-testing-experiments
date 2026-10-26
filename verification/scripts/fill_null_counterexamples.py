@@ -2,7 +2,8 @@
 
 `fill_null` claims its output has no NaN when the data has none, whatever the fill (F20). A NaN
 fill therefore passes `clip`, `sum` and `noise`, and the noise mechanism rounds the NaN sum to 0:
-adding one null row moves the released sum from `n` to about 0.
+adding one null row moves the released sum from `n` to about 0. Fixed on this branch: against a
+build of it, `sum` rejects the query.
 
     uv run --with opendp==0.16.0 --with polars==1.36.1 --with pyarrow \
         python -I verification/scripts/fill_null_counterexamples.py

@@ -353,7 +353,12 @@ Fill Null
 
 ``.fill_null`` replaces null values. Not to be confused with
 ``.fill_nan``. All data types in Polars may be null. The output data is
-only considered non-null if the fill expression is non-null.
+only considered non-null if the fill expression is non-null, and may
+contain NaN if the fill expression may.
+
+The fill expression must have the same type as the data. A numeric
+literal is converted to the data's type if it can be represented
+exactly; otherwise, cast the fill expression first.
 
 In common use throughout the documentation, the fill value has been
 simply a single scalar, but more complicated expressions are valid:

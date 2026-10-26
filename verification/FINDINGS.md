@@ -436,11 +436,15 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
 - **Confirmed:** by running it only (Polars 0.52): on an `i32` column, the fills `1.5`, `2^40`,
   `"a"` and an `f64` column give `Float64`, `Int64`, `String` and `Float64` columns, which the
   output domain (`i32`) rejects (its member check errors). Test:
-  `test_fill_null_keeps_dtype` (ignored while open).
+  `test_fill_null_keeps_dtype`.
 - **Impact:** Constructors downstream choose their algorithm and sensitivity from the domain's
   type, for example integer arithmetic for an `i32` sum, while Polars computes on the supertype.
   No privacy violation has been shown.
-- **Status:** Open. The fix is to require the fill's type to be the data's (or cast the fill to it).
+- **Status:** Fixed on this branch: the constructor rejects a fill whose type is not the data's. A
+  numeric scalar literal that the data's type represents exactly is first converted to it (so
+  `fill_null(0)` and `fill_null(0.0)` still work on integer columns, as Polars treats Python
+  literals). `dp.quantile`, which filled nulls with the median of the candidates as an `f64`, now
+  converts it to the data's type.
 
 ### F20. `fill_null` claims no NaN when the fill can be NaN
 
@@ -450,11 +454,12 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
 - **Confirmed:**
   - by running it: `col("x").fill_null(lit(NaN))` and `col("x").fill_null(col("f"))` on a
     non-NaN `f64` column give NaN, and the output domain's member check returns false. Test:
-    `test_fill_null_nan` (ignored while open);
+    `test_fill_null_nan`;
   - in Lean, on the model (`fill_nan_counterexample`). `fill_member` proves the claim holds when
     every fill value satisfies the data's predicate.
 - **Impact:** see F21.
-- **Status:** Open. The fix is to make the output's NaN flag the data's or the fill's.
+- **Status:** Fixed on this branch: the output's NaN flag is the data's or the fill's. Proved
+  sound on the model (`fill_member_fixed`, `fill_noNaN_fixed`).
 
 ### F21. A null row changes a released sum by up to `n` (privacy violation)
 
@@ -471,7 +476,9 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
 - **Impact:** A privacy violation: one release distinguishes neighbouring datasets almost
   certainly. The privacy loss is about `n / b` for noise scale `b`, not the claimed `1 / b`. It needs
   only a NaN fill, which an analyst may choose by mistake.
-- **Status:** Open. Fixing F20 rejects the query at `clip` or `sum`.
+- **Status:** Fixed on this branch by the fix of F20: `sum` rejects the query ("input data (x)
+  might contain nans"). Separately, `discretize_vec` maps NaN to 0 silently; it could instead
+  return an error, as defence in depth.
 
 ## Fragile derivations
 
