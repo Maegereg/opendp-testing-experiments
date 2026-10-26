@@ -7,6 +7,7 @@ use crate::domains::{AtomDomain, LazyFrameDomain, OptionDomain, SeriesDomain};
 use crate::metrics::{FrameDistance, SymmetricDistance};
 
 use super::*;
+use crate::transformations::make_stable_expr::test_helper::{Lcg, same_f64};
 
 #[test]
 fn test_make_expr_fill_null() -> Fallible<()> {
@@ -88,28 +89,6 @@ fn test_make_expr_fill_null_expr_filter_fail() -> Fallible<()> {
 // Polars' `fill_null` is the per-row model `fillRow` (the data value, or the fill value if the data
 // is null), in each context, and keeps the data's type when the fill has it.
 
-/// Deterministic pseudo-random values (a linear congruential generator).
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.0 >> 33
-    }
-    fn f64(&mut self) -> f64 {
-        match self.next() % 10 {
-            0 => f64::NAN,
-            1 => f64::INFINITY,
-            2 => f64::NEG_INFINITY,
-            3 => -0.0,
-            _ => (self.next() as f64 - 2f64.powi(30)) * 2f64.powi((self.next() % 80) as i32 - 40),
-        }
-    }
-}
-
 const N: usize = 200;
 
 /// Evaluates the expression built by `make_stable` for `expr` on `lf`, in a row-by-row context
@@ -130,13 +109,6 @@ fn eval_row_by_row(
     assert_eq!(series.dtype(), &t.output_domain.column.dtype());
     assert!(t.output_domain.column.member(&series)?);
     Ok(series)
-}
-
-fn same_f64(a: Option<f64>, b: Option<f64>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
-        (a, b) => a.is_none() && b.is_none(),
-    }
 }
 
 #[test]

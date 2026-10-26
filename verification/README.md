@@ -626,6 +626,48 @@ uv run --with opendp==0.16.0 --with polars==1.36.1 --with pyarrow \
 Mutation check: building `fill.fill_null(data)` instead of `data.fill_null(fill)` makes 4 tests
 fail.
 
+## Status: `filter` (Polars, Lean and tests)
+
+`make_stable_filter` builds `LazyFrame.filter(predicate)` and `make_expr_filter` builds
+`expr.filter(by)` (in an aggregation context). As with `fill_null`, OpenDP only builds the plan, so
+what matters is whether the claims hold for what Polars computes. They do; no bugs were found.
+
+- **Lean** (`verification/lean/OpenDPVerification/Filter.lean`), on a per-row model of `filter`
+  (keep the rows whose predicate is `true`, in order):
+  - the output domain: output rows are input rows, so the column domains hold (`filt_sublist`);
+    groups only shrink and no group appears, so `max_length` and `max_groups` hold
+    (`filt_group_length_le`, `filt_keys`, `filtMap_length_le`);
+  - stability `d ↦ d`: for the symmetric distance (`filt_symDist`), the insert-delete distance
+    (`filt_idClose`: filtering a shared subsequence gives one of the filtered datasets) and the
+    identifier distance (`filt_symIdClose`), lifted to every bound of the frame distance, per group
+    and in the number of groups that differ (`filt_frameClose`, `filt_frame_*`); for
+    `expr.filter(by)` on each group (`filtMap_symDist`, `filtMap_idClose`);
+  - the dropped invariants: filtering does not preserve keys or lengths
+    (`filt_keys_not_invariant`, `filt_lengths_not_invariant`), so `make_stable_filter` must drop
+    both, and `make_expr_filter` must drop lengths. It keeps keys because Polars keeps empty
+    groups in an aggregation, which the tests check.
+- **Conformance tests** (`test_filter_model` in `make_stable_lazyframe/filter/test.rs`,
+  `test_expr_filter_model` in `make_stable_expr/expr_filter/test.rs`): Polars' output is the
+  model's, bit for bit, on random frames (NaN, infinities, signed zeros, nulls) with predicates that
+  are columns, comparisons, Kleene `and`/`or` with nulls, and literals; for both distances, in
+  `select` and group-by contexts (every input group present, in order). Every output is in the
+  output domain (columns, `max_length`, `max_groups`).
+- **Assumed:** the predicate, the margins' groupings and the identifier are row functions. The
+  identifier is any expression the user gives, and nothing checks this (TRUST.md).
+
+Mutation checks, each caught by the tests:
+- the frame filter negating its predicate;
+- the frame filter keeping the margins' invariants;
+- `make_expr_filter` claiming the lengths invariant;
+- `make_expr_filter` swapping `expr` and `by`.
+
+Aside: `FrameDomain::member` errors on a margin with no grouping columns (Polars rejects a group-by
+without keys), so the tests check margins themselves. This affects only the membership check.
+
+```sh
+cd rust && cargo test --features untrusted,polars-ffi --lib filter
+```
+
 ## Status: `make_np_clamp` (Python and numpy, Lean)
 
 `make_np_clamp` is Python code over numpy, so Creusot does not apply. Its `_function` is
