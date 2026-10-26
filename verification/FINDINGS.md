@@ -428,6 +428,51 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
 - **Status:** Open. One option is to divide rows whose norm overflows by a power of two, which is
   exact, before computing the factor.
 
+### F19. `fill_null` changes the column's type, but the output domain keeps the data's
+
+- **What:** Polars casts `data.fill_null(fill)` to the supertype of the data's and the fill's
+  types. `make_expr_fill_null` copies the data's domain to the output, type included, and only
+  rejects categorical data and nullable fills.
+- **Confirmed:** by running it only (Polars 0.52): on an `i32` column, the fills `1.5`, `2^40`,
+  `"a"` and an `f64` column give `Float64`, `Int64`, `String` and `Float64` columns, which the
+  output domain (`i32`) rejects (its member check errors). Test:
+  `test_fill_null_keeps_dtype` (ignored while open).
+- **Impact:** Constructors downstream choose their algorithm and sensitivity from the domain's
+  type, for example integer arithmetic for an `i32` sum, while Polars computes on the supertype.
+  No privacy violation has been shown.
+- **Status:** Open. The fix is to require the fill's type to be the data's (or cast the fill to it).
+
+### F20. `fill_null` claims no NaN when the fill can be NaN
+
+- **What:** The output domain keeps the data's NaN flag. A fill that can be NaN (a NaN literal,
+  or a column whose domain allows NaN) puts NaN into a column the domain says has none. `fill_nan`
+  checks this (`fill_can_be_nan`); `fill_null` does not.
+- **Confirmed:**
+  - by running it: `col("x").fill_null(lit(NaN))` and `col("x").fill_null(col("f"))` on a
+    non-NaN `f64` column give NaN, and the output domain's member check returns false. Test:
+    `test_fill_null_nan` (ignored while open);
+  - in Lean, on the model (`fill_nan_counterexample`). `fill_member` proves the claim holds when
+    every fill value satisfies the data's predicate.
+- **Impact:** see F21.
+- **Status:** Open. The fix is to make the output's NaN flag the data's or the fill's.
+
+### F21. A null row changes a released sum by up to `n` (privacy violation)
+
+- **What:** Through F20, `col.fill_nan(0.0).fill_null(NaN)` has a domain without NaN, so `clip`,
+  `sum` and `.dp.noise()` accept it with sensitivity 1 (bounds `[0, 1]`). A single null row makes
+  the sum NaN, and the noise mechanism rounds NaN to 0 before adding noise (`discretize_vec`, whose
+  contract excludes NaN). Adding one row moves the value the noise is added to from `n` to 0.
+- **Confirmed:**
+  - in Lean: `null_leak` (any binary format, any summation order) and `null_leak_f64`: `n` rows of
+    `1.0` give `n`, with one null row added (symmetric distance 1) they give 0;
+  - by running it against the released package (opendp 0.16.0, Polars 1.36.1), at `ε = 1`: 1000
+    rows of `1.0` release about 1000, and the same rows plus one null release about 0
+    (`verification/scripts/fill_null_counterexamples.py`).
+- **Impact:** A privacy violation: one release distinguishes neighbouring datasets almost
+  certainly. The privacy loss is about `n / b` for noise scale `b`, not the claimed `1 / b`. It needs
+  only a NaN fill, which an analyst may choose by mistake.
+- **Status:** Open. Fixing F20 rejects the query at `clip` or `sum`.
+
 ## Fragile derivations
 
 ### D1. Pairwise float summation error uses `log2(n)` rather than `ceil(log2(n))`

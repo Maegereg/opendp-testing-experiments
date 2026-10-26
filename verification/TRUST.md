@@ -131,6 +131,7 @@ a model of floating-point rounding. Its theorems depend only on Lean's standard 
 | `OpenDP.Float.Fmt.canOverflowSeq_sound`, `canOverflowPw_sound` | `can_float_sum_overflow` (both impls), whose Creusot contract they justify | See below. |
 | `OpenDP.Float.Fmt.satSeqSum_err` | `Sequential::<T>::saturating_sum`, justifying `seq_saturating_sum_error` | IEEE arithmetic and the transcription, as below; `saturating_add` is IEEE addition clamped to `[-MAX, MAX]` (an infinity clamps to `±MAX`). |
 | `OpenDP.NpClamp.Clamp.clamp_map`, `clamp_stable`, `clamp_no_nan`, `clamp_member`, `clamp_empty`, `clamp_true_norm`, `clamp_terminates`, and the counterexamples F9-F14 (about the code before the fixes) | `make_np_clamp` (Python, `python/src/opendp/extras/numpy/_make_np_clamp/`) | The numpy model and the transcription, below. |
+| `OpenDP.FillNull.fill_member`, `fill_stable`, `fill_stable_scalar`, and the counterexamples F20 (`fill_nan_counterexample`) and F21 (`null_leak`, `null_leak_f64`) | `make_expr_fill_null` (`rust/src/transformations/make_stable_expr/expr_fill_null/`) | The Polars model, below. |
 | `OpenDP.NpClamp.Exec.ClampQ.clamp_toRes`, `rowNormQ_toF`, `numpyPlan` | none: they tie an executable copy of the `make_np_clamp` model to the model, so tests can run it | Nothing. The oracle's input and output (`NpClampOracle.lean`) and the constructor's computations (`floorFloat`, the conversion of `origin`) are not proved; the conformance tests check them. |
 
 Assumptions of these theorems:
@@ -151,6 +152,22 @@ Assumptions of these theorems:
 - **Exact helpers.** `alerting_abs` and `total_max` are exact on floats (as in the Creusot
   contracts), and the bounds are not NaN (`mag` is then a real number).
 - **Sizes.** `size < 2^64` (`usize`).
+
+Assumptions of the `make_expr_fill_null` theorems (`FillNull.lean`):
+
+- **Polars' `fill_null`** is per row: the data value, or the fill value if the data is null; a
+  scalar fill is repeated on every row. Tested against Polars 0.52 in `expr_fill_null/test.rs`
+  (`test_fill_null_model_*`: random columns with NaN, infinities and nulls; column and scalar fills;
+  row-by-row and aggregation contexts).
+- **Types.** The model has one value type. Polars casts to the supertype (F19), which the model
+  does not cover.
+- **Contexts.** The constructor requires a row-by-row context for a column fill (assumed: each
+  child expression is then a function of the row), and allows any context for a scalar fill (the
+  output is then a function of each value of the data expression's output).
+- **F21.** `clip` keeps NaN; `sum` adds along some tree (`Plan`), as in `NpClamp.lean`; the noise
+  mechanism rounds NaN to 0 (`discretize_vec`).
+- **Not verified with Creusot.** Creusot's toolchain cannot compile Polars (`polars-ops` uses
+  `core::unicode` items that its nightly lacks), so the constructor's own logic is only tested.
 
 Assumptions of the `make_np_clamp` theorems (`NpClamp.lean`):
 

@@ -584,6 +584,44 @@ Code changes:
 - `measurements::noise_threshold` is no longer a trusted module; out-of-scope items are trusted
   individually. The Laplace noise map (`make_laplace`) states its bound in its contract.
 
+## Status: `make_expr_fill_null` (Polars, Lean and tests)
+
+`make_expr_fill_null` builds the Polars expression `data.fill_null(fill)` and claims an output
+domain (the data's, without bounds or nulls) and the stability map `d_in ↦ d_in`. OpenDP computes
+nothing itself, so there is no floating-point arithmetic to model. What matters is whether the
+claims hold for what Polars computes.
+
+- **Lean** (`verification/lean/OpenDPVerification/FillNull.lean`), on a per-row model of
+  `fill_null`:
+  - `fill_member`: the output is in the claimed domain when every fill value satisfies the data's
+    predicate;
+  - `fill_stable`, `fill_stable_scalar`: `d_out ≤ d_in` under the symmetric distance, for column
+    and scalar fills;
+  - `fill_nan_counterexample` (F20) and `null_leak` (F21).
+- **Conformance tests** (`expr_fill_null/test.rs`, `test_fill_null_model_*`): Polars' output is
+  the model's, bit for bit, on random columns (NaN, infinities, signed zeros, nulls), for column and
+  scalar fills, in row-by-row and aggregation contexts. Every output is a member of the output
+  domain.
+- **Creusot is not possible here:** its toolchain cannot compile Polars.
+
+Found (all open):
+
+| | Bug | Shown by |
+| --- | --- | --- |
+| F19 | the output's type is the supertype of the data's and the fill's; the domain keeps the data's | running it (`test_fill_null_keeps_dtype`, ignored) |
+| F20 | a fill that can be NaN puts NaN in a column whose domain excludes it | Lean (`fill_nan_counterexample`) and running it (`test_fill_null_nan`, ignored) |
+| F21 | through F20, one null row moves a released sum from `n` to about 0: a privacy violation | Lean (`null_leak`) and the released package (`verification/scripts/fill_null_counterexamples.py`) |
+
+```sh
+cd rust && cargo test --features untrusted,polars --lib expr_fill_null            # passes
+cd rust && cargo test --features untrusted,polars --lib expr_fill_null -- --ignored  # F19, F20 fail
+uv run --with opendp==0.16.0 --with polars==1.36.1 --with pyarrow \
+  python -I verification/scripts/fill_null_counterexamples.py
+```
+
+Mutation check: building `fill.fill_null(data)` instead of `data.fill_null(fill)` makes 4 tests
+fail.
+
 ## Status: `make_np_clamp` (Python and numpy, Lean)
 
 `make_np_clamp` is Python code over numpy, so Creusot does not apply. Its `_function` is
