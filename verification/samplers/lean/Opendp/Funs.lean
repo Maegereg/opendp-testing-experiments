@@ -46,7 +46,75 @@ impl_def dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig : core.cmp.PartialOrd
   partial_cmp := dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig.partial_cmp
   lt := core.cmp.PartialOrd.lt.trait_default
     dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig
+  gt := core.cmp.PartialOrd.gt.trait_default
+    dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig
 }
+
+/-- Trait implementation: [dashu_int::convert::{impl core::convert::From<i32> for dashu_int::ibig::IBig}]
+    Source: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-int-0.6.2/src/convert.rs', lines 798:8-798:30; this code is generated from a macro invocation at: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-int-0.6.2/src/convert.rs', lines 824:0-824:51
+    Name pattern: [core::convert::From<dashu_int::ibig::IBig, i32>] -/
+@[reducible, rust_trait_impl "core::convert::From<dashu_int::ibig::IBig, i32>"]
+def dashu_int.ibig.IBig.Insts.CoreConvertFromI32 : core.convert.From
+  dashu_int.ibig.IBig Std.I32 := {
+  «from» := dashu_int.ibig.IBig.Insts.CoreConvertFromI32.from
+}
+
+/-- Trait implementation: [dashu_ratio::cmp::{impl core::cmp::PartialEq<dashu_ratio::rbig::RBig> for dashu_ratio::rbig::RBig}]
+    Source: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-ratio-0.6.1/src/cmp.rs', lines 42:0-42:23
+    Name pattern: [core::cmp::PartialEq<dashu_ratio::rbig::RBig, dashu_ratio::rbig::RBig>] -/
+@[reducible, rust_trait_impl
+  "core::cmp::PartialEq<dashu_ratio::rbig::RBig, dashu_ratio::rbig::RBig>"]
+def dashu_ratio.rbig.RBig.Insts.CoreCmpPartialEqRBig : core.cmp.PartialEq
+  dashu_ratio.rbig.RBig dashu_ratio.rbig.RBig := {
+  eq := dashu_ratio.rbig.RBig.Insts.CoreCmpPartialEqRBig.eq
+}
+
+/-- Trait implementation: [dashu_ratio::convert::{impl core::convert::From<i32> for dashu_ratio::rbig::RBig}]
+    Source: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-ratio-0.6.1/src/convert.rs', lines 65:8-65:31; this code is generated from a macro invocation at: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-ratio-0.6.1/src/convert.rs', lines 110:0-110:83
+    Name pattern: [core::convert::From<dashu_ratio::rbig::RBig, i32>] -/
+@[reducible, rust_trait_impl
+  "core::convert::From<dashu_ratio::rbig::RBig, i32>"]
+def dashu_ratio.rbig.RBig.Insts.CoreConvertFromI32 : core.convert.From
+  dashu_ratio.rbig.RBig Std.I32 := {
+  «from» := dashu_ratio.rbig.RBig.Insts.CoreConvertFromI32.from
+}
+
+/-- Trait implementation: [dashu_ratio::rbig::{impl core::cmp::PartialOrd<dashu_ratio::rbig::RBig> for dashu_ratio::rbig::RBig}]
+    Source: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-ratio-0.6.1/src/rbig.rs', lines 12:9-12:19
+    Name pattern: [core::cmp::PartialOrd<dashu_ratio::rbig::RBig, dashu_ratio::rbig::RBig>] -/
+@[reducible, rust_trait_impl
+  "core::cmp::PartialOrd<dashu_ratio::rbig::RBig, dashu_ratio::rbig::RBig>"]
+impl_def dashu_ratio.rbig.RBig.Insts.CoreCmpPartialOrdRBig :
+  core.cmp.PartialOrd dashu_ratio.rbig.RBig dashu_ratio.rbig.RBig := {
+  partialEqInst := dashu_ratio.rbig.RBig.Insts.CoreCmpPartialEqRBig
+  partial_cmp := dashu_ratio.rbig.RBig.Insts.CoreCmpPartialOrdRBig.partial_cmp
+  lt := core.cmp.PartialOrd.lt.trait_default
+    dashu_ratio.rbig.RBig.Insts.CoreCmpPartialOrdRBig
+  gt := core.cmp.PartialOrd.gt.trait_default
+    dashu_ratio.rbig.RBig.Insts.CoreCmpPartialOrdRBig
+}
+
+/-- [opendp::traits::samplers::bernoulli::sample_standard_bernoulli_with]:
+    Source: 'src/traits/samplers/bernoulli/mod.rs', lines 25:0-29:1 -/
+def traits.samplers.bernoulli.sample_standard_bernoulli_with
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  let buffer := Array.repeat 1#usize 0#u8
+  let (s, to_slice_mut_back) ← lift (Array.to_slice_mut buffer)
+  let (r, rng1, s1) ← RandomSourceInst.fill_bytes rng s
+  let cf ← core.result.Result.Insts.CoreOpsTry.branch r
+  match cf with
+  | core.ops.control_flow.ControlFlow.Continue _ =>
+    let buffer1 := to_slice_mut_back s1
+    let i ← Array.index_usize buffer1 0#usize
+    let i1 ← lift (i &&& 1#u8)
+    ok (core.result.Result.Ok (i1 = 1#u8), rng1)
+  | core.ops.control_flow.ControlFlow.Break residual =>
+    let r1 ←
+      core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+        Bool (core.convert.FromSame error.Error) residual
+    ok (r1, rng1)
 
 /-- [opendp::traits::samplers::uniform::sample_uniform_ubig_below_with]: loop body 0:
     Source: 'src/traits/samplers/uniform/mod.rs', lines 88:4-96:1 -/
@@ -114,5 +182,443 @@ def traits.samplers.uniform.sample_uniform_ubig_below_with
   let buffer ← alloc.vec.from_elem core.clone.CloneU8 0#u8 byte_len
   traits.samplers.uniform.sample_uniform_ubig_below_with_loop RandomSourceInst
     rng upper threshold buffer
+
+/-- [opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with::{impl core::ops::function::FnOnce<(dashu_int::ubig::UBig,), bool> for opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with::{closure}<'_0, R>}::call_once]:
+    Source: 'src/traits/samplers/bernoulli/mod.rs', lines 165:51-165:64 -/
+def
+  traits.samplers.bernoulli.sample_bernoulli_rational_with.closure.Insts.CoreOpsFunctionFnOnceTupleUBigBool.call_once
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (c : traits.samplers.bernoulli.sample_bernoulli_rational_with.closure R)
+  (tupled_args : dashu_int.ubig.UBig) :
+  Result Bool
+  := do
+  core.cmp.PartialOrd.gt.trait_default
+    dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig c tupled_args
+
+/-- Trait implementation: [opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with::{impl core::ops::function::FnOnce<(dashu_int::ubig::UBig,), bool> for opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with::{closure}<'_0, R>}]
+    Source: 'src/traits/samplers/bernoulli/mod.rs', lines 165:51-165:64 -/
+@[reducible]
+def
+  traits.samplers.bernoulli.sample_bernoulli_rational_with.closure.Insts.CoreOpsFunctionFnOnceTupleUBigBool
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) :
+  core.ops.function.FnOnce
+  (traits.samplers.bernoulli.sample_bernoulli_rational_with.closure R)
+  dashu_int.ubig.UBig Bool := {
+  call_once :=
+    traits.samplers.bernoulli.sample_bernoulli_rational_with.closure.Insts.CoreOpsFunctionFnOnceTupleUBigBool.call_once
+    RandomSourceInst
+}
+
+/-- [opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with]:
+    Source: 'src/traits/samplers/bernoulli/mod.rs', lines 154:0-166:1 -/
+def traits.samplers.bernoulli.sample_bernoulli_rational_with
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (prob : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  let (numer, denom) ← dashu_ratio.rbig.RBig.into_parts prob
+  let (s, numer1) ← dashu_int.ibig.IBig.into_parts numer
+  match s with
+  | dashu_base.sign.Sign.Positive =>
+    let b ←
+      core.cmp.PartialOrd.gt.trait_default
+        dashu_int.ubig.UBig.Insts.CoreCmpPartialOrdUBig numer1 denom
+    if b
+    then
+      let a ←
+        core.fmt.Arguments.from_str (toStr "prob must not be greater than one")
+      let s1 ← alloc.fmt.format a
+      let s2 ← core.hint.must_use s1
+      let b1 ← std.backtrace.Backtrace.capture
+      ok (core.result.Result.Err
+        {
+          variant := error.ErrorVariant.FailedFunction,
+          message := (some s2),
+          backtrace := b1
+        }, rng)
+    else
+      let (r, rng1) ←
+        traits.samplers.uniform.sample_uniform_ubig_below_with RandomSourceInst
+          rng denom
+      let r1 ←
+        core.result.Result.map
+          (traits.samplers.bernoulli.sample_bernoulli_rational_with.closure.Insts.CoreOpsFunctionFnOnceTupleUBigBool
+          RandomSourceInst) r numer1
+      ok (r1, rng1)
+  | dashu_base.sign.Sign.Negative =>
+    let a ←
+      core.fmt.Arguments.from_str (toStr "numerator must not be negative")
+    let s1 ← alloc.fmt.format a
+    let s2 ← core.hint.must_use s1
+    let b ← std.backtrace.Backtrace.capture
+    ok (core.result.Result.Err
+      {
+        variant := error.ErrorVariant.FailedFunction,
+        message := (some s2),
+        backtrace := b
+      }, rng)
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp1]: loop body 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 71:4-77:5 -/
+@[rust_loop_body]
+def traits.samplers.cks20.sample_bernoulli_exp1_loop.body
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (k : dashu_int.ubig.UBig) (x : dashu_ratio.rbig.RBig) (rng : R)
+  (k1 : dashu_int.ubig.UBig) :
+  Result (ControlFlow (R × dashu_int.ubig.UBig) ((core.result.Result Bool
+    error.Error) × R))
+  := do
+  let r ← dashu_ratio.rbig.RBig.Insts.CoreCloneClone.clone x
+  let r1 ←
+    dashu_ratio.rbig.RBig.Insts.CoreOpsArithDivSharedRUBigRBig.div r k1
+  let (r2, rng1) ←
+    traits.samplers.bernoulli.sample_bernoulli_rational_with RandomSourceInst
+      rng r1
+  let cf ← core.result.Result.Insts.CoreOpsTry.branch r2
+  match cf with
+  | core.ops.control_flow.ControlFlow.Continue val =>
+    if val
+    then
+      let k2 ←
+        dashu_int.ubig.UBig.Insts.CoreOpsArithAddAssignUBig.add_assign k1 k
+      ok (cont (rng1, k2))
+    else
+      let i ← dashu_int.ubig.UBig.Insts.CoreOpsArithRemU8U8.rem k1 2#u8
+      ok (done (core.result.Result.Ok (i = 1#u8), rng1))
+  | core.ops.control_flow.ControlFlow.Break residual =>
+    let r3 ←
+      core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+        Bool (core.convert.FromSame error.Error) residual
+    ok (done (r3, rng1))
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp1]: loop 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 71:4-77:5 -/
+@[rust_loop]
+def traits.samplers.cks20.sample_bernoulli_exp1_loop
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (k : dashu_int.ubig.UBig) (rng : R) (x : dashu_ratio.rbig.RBig)
+  (k1 : dashu_int.ubig.UBig) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  loop
+    (fun (rng1, k2) => traits.samplers.cks20.sample_bernoulli_exp1_loop.body
+      RandomSourceInst k x rng1 k2)
+    (rng, k1)
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp1]:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 69:0-78:1 -/
+def traits.samplers.cks20.sample_bernoulli_exp1
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  let k ← dashu_int.ubig.UBig.ONE
+  traits.samplers.cks20.sample_bernoulli_exp1_loop RandomSourceInst k rng x k
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp_with]: loop body 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 98:4-106:1 -/
+@[rust_loop_body]
+def traits.samplers.cks20.sample_bernoulli_exp_with_loop.body
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result (ControlFlow (R × dashu_ratio.rbig.RBig) ((core.result.Result Bool
+    error.Error) × R))
+  := do
+  let r ← dashu_ratio.rbig.RBig.ONE
+  let b ←
+    core.cmp.PartialOrd.gt.trait_default
+      dashu_ratio.rbig.RBig.Insts.CoreCmpPartialOrdRBig x r
+  if b
+  then
+    let r1 ←
+      core.convert.IntoFrom.into dashu_ratio.rbig.RBig.Insts.CoreConvertFromI32
+        1#i32
+    let (r2, rng1) ←
+      traits.samplers.cks20.sample_bernoulli_exp1 RandomSourceInst rng r1
+    let cf ← core.result.Result.Insts.CoreOpsTry.branch r2
+    match cf with
+    | core.ops.control_flow.ControlFlow.Continue val =>
+      if val
+      then
+        let x1 ←
+          dashu_ratio.rbig.RBig.Insts.CoreOpsArithSubAssignRBig.sub_assign x r
+        ok (cont (rng1, x1))
+      else ok (done (core.result.Result.Ok false, rng1))
+    | core.ops.control_flow.ControlFlow.Break residual =>
+      let r3 ←
+        core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+          Bool (core.convert.FromSame error.Error) residual
+      ok (done (r3, rng1))
+  else
+    let (r1, rng1) ←
+      traits.samplers.cks20.sample_bernoulli_exp1 RandomSourceInst rng x
+    ok (done (r1, rng1))
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp_with]: loop 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 98:4-106:1 -/
+@[rust_loop]
+def traits.samplers.cks20.sample_bernoulli_exp_with_loop
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  loop
+    (fun (rng1, x1) =>
+      traits.samplers.cks20.sample_bernoulli_exp_with_loop.body
+      RandomSourceInst rng1 x1)
+    (rng, x)
+
+/-- [opendp::traits::samplers::cks20::sample_bernoulli_exp_with]:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 92:0-106:1 -/
+@[reducible]
+def traits.samplers.cks20.sample_bernoulli_exp_with
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result Bool error.Error) × R)
+  := do
+  traits.samplers.cks20.sample_bernoulli_exp_with_loop RandomSourceInst rng x
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_slow]: loop body 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 117:4-123:5 -/
+@[rust_loop_body]
+def traits.samplers.cks20.sample_geometric_exp_slow_loop.body
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (x : dashu_ratio.rbig.RBig) (rng : R) (k : dashu_int.ubig.UBig) :
+  Result (ControlFlow (R × dashu_int.ubig.UBig) ((core.result.Result
+    dashu_int.ubig.UBig error.Error) × R))
+  := do
+  let r ← dashu_ratio.rbig.RBig.Insts.CoreCloneClone.clone x
+  let (r1, rng1) ←
+    traits.samplers.cks20.sample_bernoulli_exp_with RandomSourceInst rng r
+  let cf ← core.result.Result.Insts.CoreOpsTry.branch r1
+  match cf with
+  | core.ops.control_flow.ControlFlow.Continue val =>
+    if val
+    then
+      let u ← dashu_int.ubig.UBig.ONE
+      let k1 ←
+        dashu_int.ubig.UBig.Insts.CoreOpsArithAddAssignUBig.add_assign k u
+      ok (cont (rng1, k1))
+    else ok (done (core.result.Result.Ok k, rng1))
+  | core.ops.control_flow.ControlFlow.Break residual =>
+    let r2 ←
+      core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+        dashu_int.ubig.UBig (core.convert.FromSame error.Error) residual
+    ok (done (r2, rng1))
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_slow]: loop 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 117:4-123:5 -/
+@[rust_loop]
+def traits.samplers.cks20.sample_geometric_exp_slow_loop
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) (k : dashu_int.ubig.UBig) :
+  Result ((core.result.Result dashu_int.ubig.UBig error.Error) × R)
+  := do
+  loop
+    (fun (rng1, k1) =>
+      traits.samplers.cks20.sample_geometric_exp_slow_loop.body
+      RandomSourceInst x rng1 k1)
+    (rng, k)
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_slow]:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 115:0-124:1 -/
+def traits.samplers.cks20.sample_geometric_exp_slow
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result dashu_int.ubig.UBig error.Error) × R)
+  := do
+  let k ← dashu_int.ubig.UBig.ZERO
+  traits.samplers.cks20.sample_geometric_exp_slow_loop RandomSourceInst rng x k
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_fast_with]: loop body 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 150:4-156:5 -/
+@[rust_loop_body]
+def traits.samplers.cks20.sample_geometric_exp_fast_with_loop.body
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (numer : dashu_int.ibig.IBig) (denom : dashu_int.ubig.UBig) (rng : R)
+  (u : dashu_int.ubig.UBig) :
+  Result (ControlFlow (R × dashu_int.ubig.UBig) ((core.result.Result
+    dashu_int.ubig.UBig error.Error) × R))
+  := do
+  let i ← dashu_int.convert.UBig.as_ibig u
+  let i1 ← dashu_int.ibig.IBig.Insts.CoreCloneClone.clone i
+  let u1 ← dashu_int.ubig.UBig.Insts.CoreCloneClone.clone denom
+  let r ← dashu_ratio.rbig.RBig.from_parts i1 u1
+  let (r1, rng1) ←
+    traits.samplers.cks20.sample_bernoulli_exp_with RandomSourceInst rng r
+  let cf ← core.result.Result.Insts.CoreOpsTry.branch r1
+  match cf with
+  | core.ops.control_flow.ControlFlow.Continue val =>
+    if val
+    then
+      let r2 ← dashu_ratio.rbig.RBig.ONE
+      let (r3, rng2) ←
+        traits.samplers.cks20.sample_geometric_exp_slow RandomSourceInst rng1
+          r2
+      let cf1 ← core.result.Result.Insts.CoreOpsTry.branch r3
+      match cf1 with
+      | core.ops.control_flow.ControlFlow.Continue val1 =>
+        let u2 ←
+          dashu_int.ubig.UBig.Insts.CoreOpsArithMulUBigUBig.mul val1 denom
+        let u3 ← dashu_int.ubig.UBig.Insts.CoreOpsArithAddUBigUBig.add u2 u
+        let (_, u4) ← dashu_int.ibig.IBig.into_parts numer
+        let u5 ← dashu_int.ubig.UBig.Insts.CoreOpsArithDivUBigUBig.div u3 u4
+        ok (done (core.result.Result.Ok u5, rng2))
+      | core.ops.control_flow.ControlFlow.Break residual =>
+        let r4 ←
+          core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+            dashu_int.ubig.UBig (core.convert.FromSame error.Error) residual
+        ok (done (r4, rng2))
+    else
+      let (r2, rng2) ←
+        traits.samplers.uniform.sample_uniform_ubig_below_with RandomSourceInst
+          rng1 u1
+      let cf1 ← core.result.Result.Insts.CoreOpsTry.branch r2
+      match cf1 with
+      | core.ops.control_flow.ControlFlow.Continue val1 =>
+        ok (cont (rng2, val1))
+      | core.ops.control_flow.ControlFlow.Break residual =>
+        let r3 ←
+          core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+            dashu_int.ubig.UBig (core.convert.FromSame error.Error) residual
+        ok (done (r3, rng2))
+  | core.ops.control_flow.ControlFlow.Break residual =>
+    let r2 ←
+      core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+        dashu_int.ubig.UBig (core.convert.FromSame error.Error) residual
+    ok (done (r2, rng1))
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_fast_with]: loop 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 150:4-156:5 -/
+@[rust_loop]
+def traits.samplers.cks20.sample_geometric_exp_fast_with_loop
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (numer : dashu_int.ibig.IBig) (denom : dashu_int.ubig.UBig)
+  (u : dashu_int.ubig.UBig) :
+  Result ((core.result.Result dashu_int.ubig.UBig error.Error) × R)
+  := do
+  loop
+    (fun (rng1, u1) =>
+      traits.samplers.cks20.sample_geometric_exp_fast_with_loop.body
+      RandomSourceInst numer denom rng1 u1)
+    (rng, u)
+
+/-- [opendp::traits::samplers::cks20::sample_geometric_exp_fast_with]:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 138:0-157:1 -/
+def traits.samplers.cks20.sample_geometric_exp_fast_with
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (x : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result dashu_int.ubig.UBig error.Error) × R)
+  := do
+  let b ← dashu_ratio.rbig.RBig.is_zero x
+  if b
+  then let u ← dashu_int.ubig.UBig.ZERO
+       ok (core.result.Result.Ok u, rng)
+  else
+    let (numer, denom) ← dashu_ratio.rbig.RBig.into_parts x
+    let u ← dashu_int.ubig.UBig.Insts.CoreCloneClone.clone denom
+    let (r, rng1) ←
+      traits.samplers.uniform.sample_uniform_ubig_below_with RandomSourceInst
+        rng u
+    let cf ← core.result.Result.Insts.CoreOpsTry.branch r
+    match cf with
+    | core.ops.control_flow.ControlFlow.Continue val =>
+      traits.samplers.cks20.sample_geometric_exp_fast_with_loop
+        RandomSourceInst rng1 numer denom val
+    | core.ops.control_flow.ControlFlow.Break residual =>
+      let r1 ←
+        core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+          dashu_int.ubig.UBig (core.convert.FromSame error.Error) residual
+      ok (r1, rng1)
+
+/-- [opendp::traits::samplers::cks20::sample_discrete_laplace_with]: loop body 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 191:4-199:5 -/
+@[rust_loop_body]
+def traits.samplers.cks20.sample_discrete_laplace_with_loop.body
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R)
+  (inv_scale : dashu_ratio.rbig.RBig) (rng : R) :
+  Result (ControlFlow R ((core.result.Result dashu_int.ibig.IBig error.Error)
+    × R))
+  := do
+  let (r, rng1) ←
+    traits.samplers.bernoulli.sample_standard_bernoulli_with RandomSourceInst
+      rng
+  let cf ← core.result.Result.Insts.CoreOpsTry.branch r
+  match cf with
+  | core.ops.control_flow.ControlFlow.Continue val =>
+    let r1 ← dashu_ratio.rbig.RBig.Insts.CoreCloneClone.clone inv_scale
+    let (r2, rng2) ←
+      traits.samplers.cks20.sample_geometric_exp_fast_with RandomSourceInst
+        rng1 r1
+    let cf1 ← core.result.Result.Insts.CoreOpsTry.branch r2
+    match cf1 with
+    | core.ops.control_flow.ControlFlow.Continue val1 =>
+      let i ← dashu_int.convert.UBig.as_ibig val1
+      let magnitude ← dashu_int.ibig.IBig.Insts.CoreCloneClone.clone i
+      if val
+      then
+        if val
+        then ok (done (core.result.Result.Ok magnitude, rng2))
+        else
+          let magnitude1 ←
+            dashu_int.ibig.IBig.Insts.CoreOpsArithNegIBig.neg magnitude
+          ok (done (core.result.Result.Ok magnitude1, rng2))
+      else
+        let b ← dashu_int.ibig.IBig.is_zero magnitude
+        if b
+        then ok (cont rng2)
+        else
+          if val
+          then ok (done (core.result.Result.Ok magnitude, rng2))
+          else
+            let magnitude1 ←
+              dashu_int.ibig.IBig.Insts.CoreOpsArithNegIBig.neg magnitude
+            ok (done (core.result.Result.Ok magnitude1, rng2))
+    | core.ops.control_flow.ControlFlow.Break residual =>
+      let r3 ←
+        core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+          dashu_int.ibig.IBig (core.convert.FromSame error.Error) residual
+      ok (done (r3, rng2))
+  | core.ops.control_flow.ControlFlow.Break residual =>
+    let r1 ←
+      core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual
+        dashu_int.ibig.IBig (core.convert.FromSame error.Error) residual
+    ok (done (r1, rng1))
+
+/-- [opendp::traits::samplers::cks20::sample_discrete_laplace_with]: loop 0:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 191:4-199:5 -/
+@[rust_loop]
+def traits.samplers.cks20.sample_discrete_laplace_with_loop
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (inv_scale : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result dashu_int.ibig.IBig error.Error) × R)
+  := do
+  loop
+    (fun rng1 => traits.samplers.cks20.sample_discrete_laplace_with_loop.body
+      RandomSourceInst inv_scale rng1)
+    rng
+
+/-- [opendp::traits::samplers::cks20::sample_discrete_laplace_with]:
+    Source: 'src/traits/samplers/cks20/mod.rs', lines 181:0-200:1 -/
+def traits.samplers.cks20.sample_discrete_laplace_with
+  {R : Type _} (RandomSourceInst : traits.samplers.RandomSource R) (rng : R)
+  (scale : dashu_ratio.rbig.RBig) :
+  Result ((core.result.Result dashu_int.ibig.IBig error.Error) × R)
+  := do
+  let b ← dashu_ratio.rbig.RBig.is_zero scale
+  if b
+  then
+    let i ←
+      core.convert.IntoFrom.into dashu_int.ibig.IBig.Insts.CoreConvertFromI32
+        0#i32
+    ok (core.result.Result.Ok i, rng)
+  else
+    let (numer, denom) ← dashu_ratio.rbig.RBig.into_parts scale
+    let i ← dashu_int.convert.UBig.as_ibig denom
+    let i1 ← dashu_int.ibig.IBig.Insts.CoreCloneClone.clone i
+    let (_, u) ← dashu_int.ibig.IBig.into_parts numer
+    let inv_scale ← dashu_ratio.rbig.RBig.from_parts i1 u
+    traits.samplers.cks20.sample_discrete_laplace_with_loop RandomSourceInst
+      rng inv_scale
 
 end opendp

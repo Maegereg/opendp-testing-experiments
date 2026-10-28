@@ -961,51 +961,88 @@ real, but it needs a source change to OpenDP and a probability layer for tapes a
 would be built from scratch, and the code it links is short enough to review line by line. The
 first step on the SampCert route is porting SampCert to Lean v4.35 (one minor version).
 
-### Phase 3: samplers, proved on the extracted code (proof of concept)
+### Phase 3: the discrete Laplace sampler, proved on the extracted code
 
 The samplers are proved about the code Charon and Aeneas extract from `rust/src` itself, so that a
 change to the Rust code that breaks the correspondence fails the check:
 `verification/samplers/extract.sh --check` re-extracts and compares with the committed Lean
 (`lean/Opendp/{Types,Funs}.lean`), and the proofs are about those files.
 
-Proved so far: **`sample_uniform_ubig_below` samples uniformly from `[0, upper)`**, for `upper > 0`
-whose bit length fits in a `usize` (`OpenDP.Samplers.Uniform.sample_uniform_ubig_below_with_uniform`,
-on the extracted `sample_uniform_ubig_below_with`). Only Lean's standard axioms are used.
+**Proved: `sample_discrete_laplace(scale)` is discrete Laplace, up to a negligible error.** For
+`scale > 0` whose numerator's bit length fits in a `usize` (`discrete_laplace_close`,
+`SamplerProofs/DiscreteLaplace.lean`): for every integer `z`, with `r = e^{-1/scale}`,
+
+    Pr[returns z] ≤ (1 - r)/(1 + r) r^{|z|} ≤ Pr[returns z] + ε,   ε ≤ 72 / M!,
+
+where `M = 2^(2^numBits - 1 - D) - 1` (`epsLap_le`), `numBits` is the width of `usize` (32 or 64)
+and `D ≥ 1` bounds the bit length of the scale's numerator. For `scale = 0` it returns `0`
+(`discrete_laplace_zero`). Only Lean's standard axioms are used.
+
+The error is not slack in the proof: the sampler is not exact on a real machine (`FINDINGS.md` D8).
+In `sample_bernoulli_exp1` the counter `k` is unbounded and the loop samples `Bernoulli(x / k)`, whose
+denominator eventually has more bits than a `usize` can count; the program would fail there (the
+model fails where `bit_len` cannot return its value). Reaching that `k` has probability at most
+`1/M!`. So the theorems bound the distance to the ideal distribution (`Approx`) instead of
+claiming equality.
+
+The chain, one theorem per sampler (each about its extracted code, each failing on a wrong change to
+the code, see the mutation checks below):
+
+| Rust function | Theorem | Distribution | Error |
+| --- | --- | --- | --- |
+| `sample_uniform_ubig_below` | `Uniform.sample_uniform_ubig_below_with_uniform` | uniform on `[0, upper)` | exact |
+| `sample_standard_bernoulli` | `standard_bernoulli_dist` | `Bernoulli(1/2)` | exact |
+| `sample_bernoulli_rational` | `bernoulli_rational_dist` | `Bernoulli(q)`, `q ∈ [0, 1]` | exact |
+| `sample_bernoulli_exp1` | `Exp1.exp1_approx` | `Bernoulli(e^{-x})`, `x ∈ [0, 1]` | `eps1 D = 1/M!` |
+| `sample_bernoulli_exp` | `Exp.exp_approx` | `Bernoulli(e^{-x})`, `x ≥ 0` | `epsExp D` |
+| `sample_geometric_exp_slow` | `Slow.slow_approx` | geometric, ratio `e^{-x}`, `x > 0` | `epsSlow x D` |
+| `sample_geometric_exp_fast` | `Fast.fast_approx` | geometric, ratio `e^{-x}`, `x > 0` | `epsFast D` |
+| `sample_discrete_laplace` | `discrete_laplace_approx` | discrete Laplace, ratio `e^{-1/scale}` | `epsLap D ≤ 72 eps1 D` |
 
 How:
 
-- **The code change.** `sample_uniform_ubig_below` calls `sample_uniform_ubig_below_with(&mut
-  SystemSource, upper)`, which draws its bytes from `rng: &mut R` (`R: RandomSource`, a new trait
-  whose `fill_bytes` has the Proof Definition of `fill_bytes`; `SystemSource` calls `fill_bytes`).
-  Behavior is unchanged. Aeneas then threads the source's state through the extracted code.
-- **External models** (`lean/Opendp/{Types,Funs}External.lean`, trusted): `UBig` is `ℕ`, and the
-  eight operations used (`bit_len`, `div_ceil`, `from_be_bytes`, `-`, `%`, comparisons) are their
-  documented behavior, failing where they panic. `extract.sh --check` also fails if the extracted
-  code calls an external item without a model.
-- **The tape semantics** (`SamplerProofs/Tape.lean`). With `tapeSource`, the source's state is a
-  random tape and a sampler is a function of it. `HasDist f μ`: on a tape of independent uniform
-  bytes, `f` returns `a` with probability `μ a` (a sub-probability mass function, SampCert's
-  `SLang`). It is defined by prefixes: the probability of returning `a` is the sum of `256^-|w|`
-  over the words `w` that make `f` return `a`, for programs whose successful runs are all explained
-  by such words. The rules follow the shape of the extracted code:
-  - `hasDist_pure`, `hasDist_draw`, `hasDist_div`;
-  - `hasDist_bind`: a continuation reads fresh bytes, so sequencing composes like independent
-    draws;
-  - `hasDist_loop`: Aeneas's `loop` (a `partial_fixpoint`) has the supremum of the distributions of
-    its truncations to `n` iterations (SampCert's `probWhileCut`/`probWhile`). That every
-    successful run of the loop is a run of some truncation is proved by fixpoint induction, for
-    bodies that do not fail.
-- **The uniform sampler** (`SamplerProofs/Uniform.lean`). One iteration draws `L` bytes and either
-  returns their value modulo `upper` (below the threshold) or retries; words of length `L` are the
-  numbers below `256^L` (`SamplerProofs/Bytes.lean`), so the truncations are geometric partial sums,
-  whose limit is `1 / upper`.
+- **The code change.** Each sampler has a `_with` variant drawing its bytes from `rng: &mut R`
+  (`R: RandomSource`, whose `fill_bytes` has the Proof Definition of `fill_bytes`); the public
+  functions pass `SystemSource`, which calls `fill_bytes`, so their behavior is unchanged. The
+  private `sample_bernoulli_exp1` and `sample_geometric_exp_slow` take `rng` directly.
+  `sample_geometric_exp_fast`'s rejection loop is restructured so that it only returns (Aeneas does
+  not accept a loop with both a `break` and an early return): the same computation.
+- **External models** (`lean/Opendp/{Types,Funs}External.lean`, trusted): `UBig`, `IBig`, `RBig` are
+  `ℕ`, `ℤ`, `ℚ` (`dashu` keeps rationals in lowest terms, as `ℚ` does), and the 36 operations used
+  are their documented behavior, failing where they panic.
+- **The tape semantics** (`SamplerProofs/Tape.lean`). With `tapeSource`, the randomness source's state
+  is a random tape and a sampler is a function of it. `HasDist f μ`: on a tape of independent uniform
+  bytes, `f` returns `a` with probability `μ a` (a sub-probability mass function, as SampCert's
+  `SLang`), defined by prefixes (`∑ 256^-|w|` over the words `w` that make `f` return `a`). The rules
+  follow the shape of the extracted code: `pure`, `draw`, `fail`, `div`, `bind` (continuations read
+  fresh bytes, so sequencing composes like independent draws), and `loop`: Aeneas's `loop` (a
+  `partial_fixpoint`) has the supremum of the distributions of its truncations (SampCert's
+  `probWhile`). That every successful run of the loop is a run of a truncation is proved by fixpoint
+  induction, with a weakest liberal precondition in which failure is allowed (`wlp`), so loops
+  whose bodies fail (lost mass) are covered.
+- **Approximation** (`SamplerProofs/Approx.lean`). `Approx f ν ε`: `f` returns `a` with probability
+  at most `ν a`, and returns at all with probability at least `1 - ε`. Errors add up through `bind`;
+  a loop whose iterations have error `δ` and continue with probability at most `q < 1` has error
+  `δ / (1 - q)`, given an upper bound `ν` that is a supersolution of the loop's equation
+  (`approx_loop`). `Approx.close` gives the two-sided bound when `ν` sums to 1.
+- **The distributions.** `exp1` sums the alternating series of `e^{-x}` (`ExpSeries.lean`), with a
+  separate chain bound for the probability of reaching the failing `k`. The fast geometric sampler
+  rests on CKS20's identity (`FastMath.lean`): with `ρ = e^{-1/d}`, accepting `u` with probability
+  `ρ^u` and adding `d` times a geometric(`ρ^d`) value gives weight `∝ ρ^X` to `X = v d + u`, and
+  `⌊X / n⌋` is geometric with ratio `ρ^n = e^{-n/d}`; averaged over the uniform `u`, the loop's
+  target is exactly that (`FastMath.average`). The Laplace loop retries "negative zero", which
+  turns `½ (1 - r) r^{|z|}` into `(1 - r)/(1 + r) r^{|z|}`.
 
-Mutation checks: making the acceptance test `sample <= threshold`, or the threshold `max` (no
-correction for the remainder), each makes `extract.sh --check` fail and the proof fail.
+Mutation checks, each of which makes `extract.sh --check` fail and the proof fail:
+- the uniform sampler accepting `sample <= threshold`, or using the threshold `max`;
+- `sample_bernoulli_exp1` returning `k % 2 == 0` (also with the Lean step equation updated to match
+  the mutated code: the loop's probability equation then fails);
+- `sample_geometric_exp_fast` returning `(v2 * denom) / numer` (no `+ u`);
+- `sample_discrete_laplace` returning `magnitude` for both signs.
 
-Next steps: the other samplers on the discrete Laplace path (`sample_bernoulli_rational`,
-`sample_bernoulli_exp1`, `sample_bernoulli_exp`, `sample_geometric_exp_slow`,
-`sample_geometric_exp_fast`, `sample_standard_bernoulli`, `sample_discrete_laplace`), each with the
-same `_with` change (and the loop restructuring in `sample_geometric_exp_fast`); their
-distributions, reusing SampCert's lemmas about `probWhile` once SampCert is ported to Lean v4.35;
-and the `Sample` impl for `ZExpFamily<1>`, to replace the trusted `noise_function`.
+What remains trusted for the discrete Laplace noise (`TRUST.md`): the tools' translation; the
+`dashu` models; that `fill_bytes` returns independent uniform bytes; the prefix definition of the
+probability of an event on the tape (`HasDist`); and, outside this proof, `noise_function`
+(that `Sample::sample` adds the sample to the shift, independently for each element), with the
+mechanism theorem (phase 2) stated in `verification/lean` for the same mass formula, in a separate
+Lean project.

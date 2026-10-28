@@ -1,1 +1,7 @@
 import SamplerProofs.Uniform
+import SamplerProofs.Bernoulli
+import SamplerProofs.Exp1
+import SamplerProofs.Exp
+import SamplerProofs.GeometricSlow
+import SamplerProofs.GeometricFast
+import SamplerProofs.DiscreteLaplace

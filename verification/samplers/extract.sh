@@ -16,7 +16,7 @@ trap 'rm -rf "$out"' EXIT
 
 # The functions to extract, with everything they call.
 start_from=(
-  crate::traits::samplers::uniform::sample_uniform_ubig_below_with
+  crate::traits::samplers::cks20::sample_discrete_laplace_with
 )
 args=()
 for f in "${start_from[@]}"; do args+=(--start-from "$f"); done

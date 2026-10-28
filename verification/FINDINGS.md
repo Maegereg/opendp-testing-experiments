@@ -583,6 +583,25 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
   `sample_geometric_exp_fast`). The Lean theorem assumes `upper > 0`.
 - **Suggestion:** say "positive" in the Proof Definition (or return an error on 0).
 
+### D8. The CKS20 samplers are exact only up to a negligible probability of failing
+
+- **Where:** `rust/src/traits/samplers/cks20/mod.rs`, `sample_bernoulli_exp1`, and everything built
+  on it (`sample_bernoulli_exp`, `sample_geometric_exp_slow`, `sample_geometric_exp_fast`,
+  `sample_discrete_laplace`).
+- **What:** The Proof Definitions promise exact distributions. `sample_bernoulli_exp1` loops over
+  `k = 1, 2, ...`, sampling `Bernoulli(x / k)` from a uniform sample below the denominator of
+  `x / k`. Once that denominator has more bits than a `usize` can count, the program cannot run
+  (`bit_len` and the byte buffer are `usize`-sized), so with positive probability it fails
+  instead of returning. The Lean proof bounds this probability: the discrete Laplace sampler is
+  within `ε ≤ 72 / M!` of the discrete Laplace distribution, `M = 2^(2^numBits - 1 - D) - 1`,
+  `D` the bit length of the scale's numerator (`discrete_laplace_close`, `epsLap_le`).
+- **Why it does not matter in practice:** with `numBits ≥ 32`, `M` is at least `2^(2^31)`, and
+  `1/M!` is far below any physical probability. Formally, the pure-DP claim of `make_laplace` holds
+  for an ideal machine; on a finite one, the output distribution differs from the ideal one by at
+  most `ε` per output, a negligible `δ`.
+- **Suggestion:** state the samplers' Proof Definitions for unbounded memory, or note the failure
+  probability.
+
 ## Tool limitations (Creusot v0.14.0)
 
 | Limitation | Workaround |

@@ -7,7 +7,7 @@ use crate::{
     traits::{ExactIntCast, Float, InfDiv},
 };
 
-use super::{fill_bytes, sample_geometric_buffer, sample_uniform_ubig_below};
+use super::{RandomSource, SystemSource, sample_geometric_buffer, sample_uniform_ubig_below_with};
 
 #[cfg(test)]
 mod test;
@@ -18,8 +18,13 @@ mod test;
 /// Return `Err(e)` if there is insufficient system entropy, or
 /// `Ok(sample)`, where `sample` is a draw from `Bernoulli(p=0.5)`.
 pub fn sample_standard_bernoulli() -> Fallible<bool> {
+    sample_standard_bernoulli_with(&mut SystemSource)
+}
+
+/// `sample_standard_bernoulli`, drawing its random bytes from `rng`.
+pub(crate) fn sample_standard_bernoulli_with<R: RandomSource>(rng: &mut R) -> Fallible<bool> {
     let mut buffer = [0u8; 1];
-    fill_bytes(&mut buffer)?;
+    rng.fill_bytes(&mut buffer)?;
     Ok(buffer[0] & 1 == 1)
 }
 
@@ -142,6 +147,14 @@ where
 /// returns `Err(e)` if there is a lack of system entropy,
 /// or `Ok(out)` where `out` is `true` with probability `prob`, otherwise `false`.
 pub fn sample_bernoulli_rational(prob: RBig) -> Fallible<bool> {
+    sample_bernoulli_rational_with(&mut SystemSource, prob)
+}
+
+/// `sample_bernoulli_rational`, drawing its random bytes from `rng`.
+pub(crate) fn sample_bernoulli_rational_with<R: RandomSource>(
+    rng: &mut R,
+    prob: RBig,
+) -> Fallible<bool> {
     let (numer, denom) = prob.into_parts();
     let (Sign::Positive, numer) = numer.into_parts() else {
         return fallible!(FailedFunction, "numerator must not be negative");
@@ -149,5 +162,5 @@ pub fn sample_bernoulli_rational(prob: RBig) -> Fallible<bool> {
     if numer > denom {
         return fallible!(FailedFunction, "prob must not be greater than one");
     }
-    sample_uniform_ubig_below(denom).map(|s| numer > s)
+    sample_uniform_ubig_below_with(rng, denom).map(|s| numer > s)
 }

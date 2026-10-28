@@ -17,13 +17,13 @@ open scoped ENNReal
 
 namespace OpenDP.Samplers.Uniform
 
-open Classical WP
+open Classical
 
 abbrev UBig := dashu_int.ubig.UBig
 abbrev Res := core.result.Result UBig error.Error
 
 /-- The extracted loop body. -/
-def body (upper threshold : UBig) : Body (alloc.vec.Vec Std.U8) Res := fun p =>
+def body (upper threshold : UBig) : Body (Tape × alloc.vec.Vec Std.U8) Res := fun p =>
   traits.samplers.uniform.sample_uniform_ubig_below_with_loop.body tapeSource upper threshold
     p.1 p.2
 
@@ -37,7 +37,7 @@ def outcome (upper threshold : UBig) (w : List Std.U8) : ControlFlow (alloc.vec.
 /-- One iteration draws as many bytes as the buffer holds. -/
 theorem stepP_body {upper threshold : UBig} (hu : upper ≠ 0) (buf : alloc.vec.Vec Std.U8)
     (t : Tape) :
-    stepP (body upper threshold) buf t =
+    stepP (Equiv.refl _) (body upper threshold) buf t =
       bindP (draw buf.slice.val.length) (fun w t' => ok (outcome upper threshold w, t')) t := by
   simp [stepP, body, traits.samplers.uniform.sample_uniform_ubig_below_with_loop.body,
     tapeSource, alloc.vec.Vec.deref_mut, alloc.vec.Vec.deref, lift,
@@ -57,28 +57,14 @@ noncomputable def K (upper threshold : UBig) (buf : alloc.vec.Vec Std.U8)
     (if c = outcome upper threshold w then 1 else 0)
 
 theorem hasDist_step {upper threshold : UBig} (hu : upper ≠ 0) (buf : alloc.vec.Vec Std.U8) :
-    HasDist (stepP (body upper threshold) buf) (K upper threshold buf) := by
+    HasDist (stepP (Equiv.refl _) (body upper threshold) buf) (K upper threshold buf) := by
   have h := hasDist_bind (hasDist_draw buf.slice.val.length)
     (fun w => hasDist_pure (outcome upper threshold w))
-  have e : stepP (body upper threshold) buf =
+  have e : stepP (Equiv.refl _) (body upper threshold) buf =
       bindP (draw buf.slice.val.length) (fun w t' => ok (outcome upper threshold w, t')) :=
     funext (stepP_body hu buf)
   rw [e]
   exact h
-
-/-- The body never fails. -/
-theorem body_no_fail {upper threshold : UBig} (hu : upper ≠ 0) (x : Tape × alloc.vec.Vec Std.U8) :
-    dspec (body upper threshold x) fun _ => True := by
-  have : ∀ t buf, ∃ r, body upper threshold (t, buf) = ok r := by
-    intro t buf
-    have := stepP_body (threshold := threshold) hu buf t
-    simp only [stepP, bindP, draw, bind_ok] at this
-    obtain ⟨r, hr, -⟩ := bind_eq_ok this
-    exact ⟨r, hr⟩
-  obtain ⟨r, hr⟩ := this x.1 x.2
-  rw [show (x.1, x.2) = x from rfl] at hr
-  rw [hr, dspec_ok]
-  trivial
 
 /-! ### The truncated loops -/
 
@@ -252,7 +238,7 @@ theorem sample_uniform_ubig_below_with_uniform (upper : UBig) (hu : 0 < upper)
   -- The code is the loop, from a buffer of `L` zeros.
   let buf0 : alloc.vec.Vec Std.U8 := { slice := Slice.from (List.replicate L 0#u8) (by simpa) }
   have hcode : (fun t => traits.samplers.uniform.sample_uniform_ubig_below_with tapeSource t upper) =
-      loopP (body upper T) buf0 := by
+      loopP (Equiv.refl _) (body upper T) buf0 := by
     funext t
     have hclone : ∀ l : List Std.U8,
         List.clone (liftFun1 core.clone.impls.CloneU8.clone) l = ok ⟨l, rfl⟩ := by
@@ -277,7 +263,7 @@ theorem sample_uniform_ubig_below_with_uniform (upper : UBig) (hu : 0 < upper)
       Slice.from_val]
     rfl
   rw [hcode]
-  have hdist := hasDist_loop (hasDist_step (threshold := T) hu.ne') (body_no_fail hu.ne') buf0
+  have hdist := hasDist_loop (hasDist_step (threshold := T) hu.ne') buf0
   refine ⟨hdist.1, fun b => ?_⟩
   rw [hdist.2 b]
   have hbuf0 : buf0.slice.val.length = L := by

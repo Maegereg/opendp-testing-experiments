@@ -21,6 +21,15 @@ set_option maxRecDepth 2048
 
 namespace opendp
 
+/-- [dashu_base::sign::Sign]
+    Source: '/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dashu-base-0.6.1/src/sign.rs', lines 126:0-126:13
+    Name pattern: [dashu_base::sign::Sign]
+    Visibility: public -/
+@[discriminant isize, rust_type "dashu_base::sign::Sign"]
+inductive dashu_base.sign.Sign where
+| Positive : dashu_base.sign.Sign
+| Negative : dashu_base.sign.Sign
+
 /-- [opendp::error::ErrorVariant]
     Source: 'src/error/mod.rs', lines 98:0-152:1
     Visibility: public -/
@@ -59,5 +68,12 @@ structure error.Error where
 structure traits.samplers.RandomSource (Self : Type _) where
   fill_bytes : Self → Slice Std.U8 → Result ((core.result.Result Unit
     error.Error) × Self × (Slice Std.U8))
+
+/-- [opendp::traits::samplers::bernoulli::sample_bernoulli_rational_with::{closure}]
+    Source: 'src/traits/samplers/bernoulli/mod.rs', lines 165:51-165:64 -/
+@[reducible]
+def traits.samplers.bernoulli.sample_bernoulli_rational_with.closure (R :
+  Type _) :=
+  dashu_int.ubig.UBig
 
 end opendp

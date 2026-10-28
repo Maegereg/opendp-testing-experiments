@@ -1,5 +1,6 @@
 use dashu::rbig;
 
+use crate::traits::samplers::SystemSource;
 use crate::traits::samplers::cks20::sample_bernoulli_exp1;
 use crate::traits::samplers::sample_bernoulli_exp;
 use crate::traits::samplers::test::{ALPHA, run_wilson_test};
@@ -99,20 +100,20 @@ const XS1: [RBig; 6] = [
 
 #[test]
 fn exp1_matches_exp_neg_x_fixed_points_wilson() {
-    let sampler = |x: RBig| sample_bernoulli_exp1(x).unwrap();
+    let sampler = |x: RBig| sample_bernoulli_exp1(&mut SystemSource, x).unwrap();
     test_fixed_points_wilson(sampler, &XS1, N_BERNOULLI, ALPHA, "exp1 fixed point");
 }
 
 #[test]
 fn exp1_is_monotone_decreasing() {
-    let sampler = |x: RBig| sample_bernoulli_exp1(x).unwrap();
+    let sampler = |x: RBig| sample_bernoulli_exp1(&mut SystemSource, x).unwrap();
     let stats = collect_phat_and_p(sampler, &XS1, N_BERNOULLI);
     assert_monotone_decreasing(&stats, N_BERNOULLI);
 }
 
 #[test]
 fn exp1_endpoints() {
-    let sampler = |x: RBig| sample_bernoulli_exp1(x).unwrap();
+    let sampler = |x: RBig| sample_bernoulli_exp1(&mut SystemSource, x).unwrap();
 
     let x0 = rbig!(0 / 1);
     for _ in 0..N_ENDPOINTS {

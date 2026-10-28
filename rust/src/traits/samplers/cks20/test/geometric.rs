@@ -1,5 +1,6 @@
 use super::*;
 use crate::traits::samplers::{
+    SystemSource,
     cks20::sample_geometric_exp_slow,
     sample_geometric_exp_fast,
     test::{assert_close_binomial_mean, assert_close_normal, check_chi_square_from_probs},
@@ -116,7 +117,7 @@ fn geometric_slow_matches_moments_and_p0_at_fixed_points() {
 
     for x in xs {
         let summ = sample_geom_summary(
-            || sample_geometric_exp_slow(x.clone()).unwrap(),
+            || sample_geometric_exp_slow(&mut SystemSource, x.clone()).unwrap(),
             N_GEOM_SLOW,
         );
         assert_geom_moments(&x, &summ);
@@ -166,7 +167,7 @@ fn geometric_fast_and_slow_agree_on_mean_statistically() {
             N_GEOM_FAST,
         );
         let slow = sample_geom_summary(
-            || sample_geometric_exp_slow(x.clone()).unwrap(),
+            || sample_geometric_exp_slow(&mut SystemSource, x.clone()).unwrap(),
             N_GEOM_SLOW,
         );
 
