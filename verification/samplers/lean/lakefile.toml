@@ -1,0 +1,17 @@
+name = "OpenDPSamplers"
+defaultTargets = ["Opendp", "SamplerProofs"]
+
+# Aeneas's Lean library, checked out next to this repository (`../aeneas`, at the commit
+# `verification/samplers/extract.sh` was run with).
+[[require]]
+name = "aeneas"
+path = "../../../../aeneas/backends/lean"
+
+# The code extracted from `rust/src/traits/samplers` by Charon and Aeneas (`Opendp/Types.lean`,
+# `Opendp/Funs.lean`), with hand-written models of the external functions it calls.
+[[lean_lib]]
+name = "Opendp"
+
+# Distribution proofs about the extracted code.
+[[lean_lib]]
+name = "SamplerProofs"

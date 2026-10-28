@@ -1,6 +1,6 @@
 use crate::{error::Fallible, traits::Integer};
 
-use super::fill_bytes;
+use super::{RandomSource, SystemSource, fill_bytes};
 
 use dashu::{base::BitTest, integer::UBig};
 use num::Unsigned;
@@ -67,6 +67,14 @@ pub fn sample_uniform_uint_below<T: Integer + Unsigned + FromBytes<N>, const N: 
 /// return either `Err(e)` if there is insufficient system entropy,
 /// or `Some(sample)`, where `sample` is uniformly distributed over `[0, upper)`.
 pub fn sample_uniform_ubig_below(upper: UBig) -> Fallible<UBig> {
+    sample_uniform_ubig_below_with(&mut SystemSource, upper)
+}
+
+/// `sample_uniform_ubig_below`, drawing its random bytes from `rng`.
+pub(crate) fn sample_uniform_ubig_below_with<R: RandomSource>(
+    rng: &mut R,
+    upper: UBig,
+) -> Fallible<UBig> {
     // ceil(ceil(log_2(upper)) / 8)
     let byte_len = upper.bit_len().div_ceil(8);
 
@@ -78,7 +86,7 @@ pub fn sample_uniform_ubig_below(upper: UBig) -> Fallible<UBig> {
     let mut buffer = vec![0; byte_len];
 
     Ok(loop {
-        fill_bytes(&mut buffer)?;
+        rng.fill_bytes(&mut buffer)?;
 
         let sample = UBig::from_be_bytes(&buffer);
         if sample < threshold {

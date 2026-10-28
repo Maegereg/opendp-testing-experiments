@@ -41,6 +41,18 @@ lake exe cache get   # download prebuilt Mathlib
 lake build           # check all proofs
 ```
 
+The samplers (`verification/samplers`, the same Lean and Mathlib, plus Aeneas's Lean library):
+Charon and Aeneas must be built next to this repository (`../charon` at the commit in
+`../aeneas/charon-pin`, and `../aeneas`; see "Phase 3" below).
+
+```sh
+cd verification/samplers
+./extract.sh --check   # the committed extraction matches the Rust code
+cd lean
+lake exe cache get
+lake build             # check the extracted code and the proofs about it
+```
+
 Normal builds are unaffected: all annotations are behind `cfg(creusot)`, and `creusot-std` is
 only a dependency under `cfg(creusot)`.
 
@@ -941,8 +953,59 @@ has the discrete Laplace mass. Transcribing OpenDP's samplers (about 100 lines o
 `SLang` would reuse that monad and most of those proofs. What it gives up is a mechanical link:
 the transcription is checked by review.
 
-**Recommendation: transcribe into SampCert's `SLang` and reuse its proofs; keep the Aeneas extraction
-as a cross-check of the transcription's control flow.** The Aeneas route's mechanical link is
+**Recommendation at the time: transcribe into SampCert's `SLang` and reuse its proofs; keep the
+Aeneas extraction as a cross-check of the transcription's control flow.** (Superseded: to keep the
+Lean from drifting away from the code, the proofs are now about the extracted code itself, with
+SampCert-style distributions; see the next section.) The Aeneas route's mechanical link is
 real, but it needs a source change to OpenDP and a probability layer for tapes and loops that
 would be built from scratch, and the code it links is short enough to review line by line. The
 first step on the SampCert route is porting SampCert to Lean v4.35 (one minor version).
+
+### Phase 3: samplers, proved on the extracted code (proof of concept)
+
+The samplers are proved about the code Charon and Aeneas extract from `rust/src` itself, so that a
+change to the Rust code that breaks the correspondence fails the check:
+`verification/samplers/extract.sh --check` re-extracts and compares with the committed Lean
+(`lean/Opendp/{Types,Funs}.lean`), and the proofs are about those files.
+
+Proved so far: **`sample_uniform_ubig_below` samples uniformly from `[0, upper)`**, for `upper > 0`
+whose bit length fits in a `usize` (`OpenDP.Samplers.Uniform.sample_uniform_ubig_below_with_uniform`,
+on the extracted `sample_uniform_ubig_below_with`). Only Lean's standard axioms are used.
+
+How:
+
+- **The code change.** `sample_uniform_ubig_below` calls `sample_uniform_ubig_below_with(&mut
+  SystemSource, upper)`, which draws its bytes from `rng: &mut R` (`R: RandomSource`, a new trait
+  whose `fill_bytes` has the Proof Definition of `fill_bytes`; `SystemSource` calls `fill_bytes`).
+  Behavior is unchanged. Aeneas then threads the source's state through the extracted code.
+- **External models** (`lean/Opendp/{Types,Funs}External.lean`, trusted): `UBig` is `ℕ`, and the
+  eight operations used (`bit_len`, `div_ceil`, `from_be_bytes`, `-`, `%`, comparisons) are their
+  documented behavior, failing where they panic. `extract.sh --check` also fails if the extracted
+  code calls an external item without a model.
+- **The tape semantics** (`SamplerProofs/Tape.lean`). With `tapeSource`, the source's state is a
+  random tape and a sampler is a function of it. `HasDist f μ`: on a tape of independent uniform
+  bytes, `f` returns `a` with probability `μ a` (a sub-probability mass function, SampCert's
+  `SLang`). It is defined by prefixes: the probability of returning `a` is the sum of `256^-|w|`
+  over the words `w` that make `f` return `a`, for programs whose successful runs are all explained
+  by such words. The rules follow the shape of the extracted code:
+  - `hasDist_pure`, `hasDist_draw`, `hasDist_div`;
+  - `hasDist_bind`: a continuation reads fresh bytes, so sequencing composes like independent
+    draws;
+  - `hasDist_loop`: Aeneas's `loop` (a `partial_fixpoint`) has the supremum of the distributions of
+    its truncations to `n` iterations (SampCert's `probWhileCut`/`probWhile`). That every
+    successful run of the loop is a run of some truncation is proved by fixpoint induction, for
+    bodies that do not fail.
+- **The uniform sampler** (`SamplerProofs/Uniform.lean`). One iteration draws `L` bytes and either
+  returns their value modulo `upper` (below the threshold) or retries; words of length `L` are the
+  numbers below `256^L` (`SamplerProofs/Bytes.lean`), so the truncations are geometric partial sums,
+  whose limit is `1 / upper`.
+
+Mutation checks: making the acceptance test `sample <= threshold`, or the threshold `max` (no
+correction for the remainder), each makes `extract.sh --check` fail and the proof fail.
+
+Next steps: the other samplers on the discrete Laplace path (`sample_bernoulli_rational`,
+`sample_bernoulli_exp1`, `sample_bernoulli_exp`, `sample_geometric_exp_slow`,
+`sample_geometric_exp_fast`, `sample_standard_bernoulli`, `sample_discrete_laplace`), each with the
+same `_with` change (and the loop restructuring in `sample_geometric_exp_fast`); their
+distributions, reusing SampCert's lemmas about `probWhile` once SampCert is ported to Lean v4.35;
+and the `Sample` impl for `ZExpFamily<1>`, to replace the trusted `noise_function`.

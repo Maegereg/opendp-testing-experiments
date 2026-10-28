@@ -53,6 +53,24 @@ pub fn fill_bytes(buffer: &mut [u8]) -> Fallible<()> {
     }
 }
 
+/// A source of random bytes.
+pub trait RandomSource {
+    /// # Proof Definition
+    /// For any input `buffer`, fill the `buffer` with random bits, where each bit is an iid draw
+    /// from Bernoulli(p=0.5), independent of all earlier draws.
+    /// Return `Err(e)` if there is insufficient system entropy, otherwise return `Ok(())`.
+    fn fill_bytes(&mut self, buffer: &mut [u8]) -> Fallible<()>;
+}
+
+/// The system source of random bytes, [`fill_bytes`].
+pub struct SystemSource;
+
+impl RandomSource for SystemSource {
+    fn fill_bytes(&mut self, buffer: &mut [u8]) -> Fallible<()> {
+        fill_bytes(buffer)
+    }
+}
+
 /// An OpenDP random number generator that implements [`rand::RngCore`].
 pub(crate) struct GeneratorOpenDP {
     /// If an error happens while sampling, it is packed into this struct and thrown later.

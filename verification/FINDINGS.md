@@ -573,6 +573,16 @@ this branch. The fixed code is proved in the same file (`clamp`). Each fix has a
 - **Suggestion:** State `make_row_by_row`'s precondition as "independent per row" rather than "no
   side-effects", or give the imputer its own proof.
 
+### D7. `sample_uniform_ubig_below` panics on `upper = 0`, which its Proof Definition allows
+
+- **Where:** `rust/src/traits/samplers/uniform/mod.rs`, `sample_uniform_ubig_below`.
+- **What:** The Proof Definition covers "any non-negative setting of `upper`", but `upper = 0`
+  divides by zero (`&max % &upper`) and panics. No distribution on `[0, 0)` exists, so the
+  statement cannot hold there.
+- **Why it is still sound:** every caller passes a positive denominator (`sample_bernoulli_rational`,
+  `sample_geometric_exp_fast`). The Lean theorem assumes `upper > 0`.
+- **Suggestion:** say "positive" in the Proof Definition (or return an error on 0).
+
 ## Tool limitations (Creusot v0.14.0)
 
 | Limitation | Workaround |
