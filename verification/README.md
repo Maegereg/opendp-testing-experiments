@@ -45,6 +45,9 @@ The samplers (`verification/samplers`, the same Lean and Mathlib, plus Aeneas's 
 Charon and Aeneas must be built next to this repository (`../charon` at the commit in
 `../aeneas/charon-pin`, and `../aeneas`; see "Phase 3" below).
 
+The samplers project also depends on `verification/lean` (path dependency), for the link to the
+mechanism theorem.
+
 ```sh
 cd verification/samplers
 ./extract.sh --check   # the committed extraction matches the Rust code
@@ -1040,9 +1043,20 @@ Mutation checks, each of which makes `extract.sh --check` fail and the proof fai
 - `sample_geometric_exp_fast` returning `(v2 * denom) / numer` (no `+ u`);
 - `sample_discrete_laplace` returning `magnitude` for both signs.
 
+**Linked to the mechanism theorem** (`SamplerProofs/Link.lean`). The samplers project depends on
+`verification/lean` (both pin Mathlib v4.35.0), so the two are checked in one build:
+- `lap_eq_discreteLaplace`: the sampler's target is phase 2's `OpenDP.Laplace.discreteLaplace`;
+- `sampler_discreteLaplace`: the extracted `sample_discrete_laplace(scale)` is within `ε` of
+  `discreteLaplace scale`, pointwise;
+- `sampler_mechanism`: phase 2's `laplace_mechanism`, applied to noise drawn by the extracted
+  sampler. If `|x - x'| ≤ d` and the privacy map's output `o` satisfies `laplace_bound(d, scale, o)`,
+  then for every set `T`, `Pr[x + Z ∈ T] ≤ e^o (Pr[x' + Z ∈ T] + ε)`: pure DP for the ideal
+  sampler, and `(o, e^o ε)`-DP for the extracted one. This is for one value; vectors go through
+  `noise_function`, which is not extracted (below).
+
 What remains trusted for the discrete Laplace noise (`TRUST.md`): the tools' translation; the
 `dashu` models; that `fill_bytes` returns independent uniform bytes; the prefix definition of the
-probability of an event on the tape (`HasDist`); and, outside this proof, `noise_function`
-(that `Sample::sample` adds the sample to the shift, independently for each element), with the
-mechanism theorem (phase 2) stated in `verification/lean` for the same mass formula, in a separate
-Lean project.
+probability of an event on the tape (`HasDist`); and `noise_function`: that
+`Sample::sample` returns `shift + Z`, with an independent `Z` for each element of a vector. (It
+builds a `dyn Fn` closure over the `Sample` trait, whose method takes no randomness source; giving
+it one would change the trait for every distribution.)

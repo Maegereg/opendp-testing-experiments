@@ -5,3 +5,4 @@ import SamplerProofs.Exp
 import SamplerProofs.GeometricSlow
 import SamplerProofs.GeometricFast
 import SamplerProofs.DiscreteLaplace
+import SamplerProofs.Link

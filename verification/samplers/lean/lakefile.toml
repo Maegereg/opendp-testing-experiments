@@ -7,6 +7,12 @@ defaultTargets = ["Opendp", "SamplerProofs"]
 name = "aeneas"
 path = "../../../../aeneas/backends/lean"
 
+# The phase-2 proofs (`verification/lean`): the mechanism theorem is stated for the distribution
+# the sampler proofs reach (`SamplerProofs/Link.lean`). Both pin the same Mathlib.
+[[require]]
+name = "OpenDPVerification"
+path = "../../lean"
+
 # The code extracted from `rust/src/traits/samplers` by Charon and Aeneas (`Opendp/Types.lean`,
 # `Opendp/Funs.lean`), with hand-written models of the external functions it calls.
 [[lean_lib]]
